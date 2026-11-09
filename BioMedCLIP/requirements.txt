@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+torch
+open_clip_torch
+transformers
+pillow
+python-multipart
