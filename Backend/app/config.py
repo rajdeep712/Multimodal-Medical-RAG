@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     s3_prefix: str = "medical-documents"
 
     max_upload_bytes: int = 10 * 1024 * 1024
+    max_stored_pdf_bytes: int = 50 * 1024 * 1024
+    max_image_pixels: int = 50_000_000
     uploads_dir: Path = BASE_DIR / "uploads"
 
     token_encryption_key: str

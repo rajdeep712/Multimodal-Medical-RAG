@@ -16,7 +16,6 @@ import asyncio
 import base64
 import hashlib
 import json
-import mimetypes
 import re
 import secrets    ## Used to generate cryptographically secure random AES keys.
 from datetime import datetime, timezone
@@ -181,13 +180,16 @@ def build_manifest(
     original_filename: str,
     mime_type: str,
     original_size: int,
+    stored_mime_type: str,
+    stored_size: int,
+    stored_extension: str,
     encrypted_aes_key: bytes,
     nonce: bytes,
     tag: bytes,
     ciphertext_sha256: str,
 ):
     return {
-        "format_version": 1,
+        "format_version": 2,
 
         "document_id": document_id,
 
@@ -197,6 +199,9 @@ def build_manifest(
             "filename": original_filename,
             "mime_type": mime_type,
             "original_size": original_size,
+            "stored_mime_type": stored_mime_type,
+            "stored_size": stored_size,
+            "stored_extension": stored_extension,
         },
 
         "encryption": {
@@ -264,7 +269,10 @@ async def prepare_document(
     input_path: str,
     user_id: str,
     document_id: str,
+    source_mime_type: str,
+    source_size: int,
     original_filename: str | None = None,
+    stored_mime_type: str = "application/pdf",
 ):
     input_file = Path(input_path)
 
@@ -279,18 +287,10 @@ async def prepare_document(
     )
 
     ## The document is stored on the server under its document id; the true
-    ## original filename (used for the manifest and MIME detection) is passed
-    ## separately and defaults to the on-disk name as in the notebook.
+    ## original filename and source metadata are passed separately.
     display_filename = original_filename or input_file.name
 
-    mime_type, _ = mimetypes.guess_type(
-        display_filename
-    )
-
-    if mime_type is None:
-        mime_type = (
-            "application/octet-stream"
-        )
+    stored_extension = input_file.suffix.lower().lstrip(".") or "pdf"
 
     encrypted_path = (
         ENCRYPTED_DIR /
@@ -351,9 +351,15 @@ async def prepare_document(
 
             original_filename=display_filename,
 
-            mime_type=mime_type,
+            mime_type=source_mime_type,
 
-            original_size=stat_result.st_size,
+            original_size=source_size,
+
+            stored_mime_type=stored_mime_type,
+
+            stored_size=stat_result.st_size,
+
+            stored_extension=stored_extension,
 
             encrypted_aes_key=encrypted_aes_key,
 

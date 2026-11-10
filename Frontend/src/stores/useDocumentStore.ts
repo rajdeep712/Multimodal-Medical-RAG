@@ -2,10 +2,12 @@ import { useState, useCallback, createContext, useContext, ReactNode, useEffect 
 import React from 'react';
 import { MedicalDocument } from '../types/document.ts';
 import { documentService } from '../services/documentService.ts';
+import { evictDocumentContent } from '../services/documentContentCache.ts';
 
 interface DocumentState {
   documents: MedicalDocument[];
   selectedDocument: MedicalDocument | null;
+  pendingDocument: MedicalDocument | null;
   currentPage: number;
   zoomLevel: number;
   rotation: number;
@@ -13,6 +15,9 @@ interface DocumentState {
   isUploadModalOpen: boolean;
   filterSearchQuery: string;
   selectDocument: (doc: MedicalDocument | string) => void;
+  setPendingDocument: (doc: MedicalDocument | null) => void;
+  loadPendingDocument: () => void;
+  setDocumentPageCount: (id: string, pageCount: number) => void;
   setCurrentPage: (page: number) => void;
   setZoomLevel: (zoom: number) => void;
   setRotation: (rotation: number) => void;
@@ -30,6 +35,7 @@ const DocumentContext = createContext<DocumentState | null>(null);
 export function DocumentProvider({ children }: { children: ReactNode }) {
   const [documents, setDocuments] = useState<MedicalDocument[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<MedicalDocument | null>(null);
+  const [pendingDocument, setPendingDocumentState] = useState<MedicalDocument | null>(null);
   const [currentPage, setCurrentPageState] = useState<number>(1);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [rotation, setRotation] = useState<number>(0);
@@ -42,17 +48,12 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
     try {
       const docs = await documentService.listDocuments();
       setDocuments(docs);
-      if (!selectedDocument && docs.length > 0) {
-        setSelectedDocument(docs[0]);
-        setCurrentPageState(1);
-      }
     } catch (err) {
-      // Keep the workspace usable even if the document API is unreachable.
       console.error('Could not refresh documents:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [selectedDocument]);
+  }, []);
 
   useEffect(() => {
     refreshDocuments();
@@ -64,22 +65,50 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
         const found = documents.find((d) => d.id === docOrId || d.fileName === docOrId);
         if (found) {
           setSelectedDocument(found);
+          setPendingDocumentState(null);
           setCurrentPageState(1);
         }
       } else {
         setSelectedDocument(docOrId);
+        setPendingDocumentState(null);
         setCurrentPageState(1);
       }
     },
     [documents]
   );
 
+  const setPendingDocument = useCallback((doc: MedicalDocument | null) => {
+    setPendingDocumentState(doc);
+    setSelectedDocument(null);
+    setCurrentPageState(1);
+  }, []);
+
+  const loadPendingDocument = useCallback(() => {
+    if (!pendingDocument) return;
+    setSelectedDocument(pendingDocument);
+    setPendingDocumentState(null);
+    setCurrentPageState(1);
+  }, [pendingDocument]);
+
+  const setDocumentPageCount = useCallback((id: string, pageCount: number) => {
+    setDocuments((prev) =>
+      prev.map((doc) => (doc.id === id ? { ...doc, pageCount } : doc))
+    );
+    setSelectedDocument((prev) => (prev?.id === id ? { ...prev, pageCount } : prev));
+    setPendingDocumentState((prev) =>
+      prev?.id === id ? { ...prev, pageCount } : prev
+    );
+  }, []);
+
   const selectDocumentAndPage = useCallback(
     (docId: string, pageNumber: number) => {
       const found = documents.find((d) => d.id === docId || d.fileName === docId);
       if (found) {
-        setSelectedDocument(found);
-        setCurrentPageState(Math.max(1, Math.min(pageNumber, found.pageCount || 1)));
+        setSelectedDocument({ ...found, pageCount: found.pageCount || 0 });
+        setPendingDocumentState(null);
+        setCurrentPageState(found.pageCount > 0
+          ? Math.max(1, Math.min(pageNumber, found.pageCount))
+          : Math.max(1, pageNumber));
       }
     },
     [documents]
@@ -89,23 +118,17 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
     setCurrentPageState(page);
   }, []);
 
-  const deleteDocument = useCallback(
-    async (id: string) => {
-      const success = await documentService.deleteDocument(id);
-      if (success) {
-        setDocuments((prev) => {
-          const next = prev.filter((d) => d.id !== id);
-          if (selectedDocument?.id === id) {
-            setSelectedDocument(next[0] || null);
-            setCurrentPageState(1);
-          }
-          return next;
-        });
-      }
-      return success;
-    },
-    [selectedDocument]
-  );
+  const deleteDocument = useCallback(async (id: string) => {
+    const success = await documentService.deleteDocument(id);
+    if (success) {
+      evictDocumentContent(id);
+      setDocuments((prev) => prev.filter((d) => d.id !== id));
+      setSelectedDocument((prev) => (prev?.id === id ? null : prev));
+      setPendingDocumentState((prev) => (prev?.id === id ? null : prev));
+      setCurrentPageState(1);
+    }
+    return success;
+  }, []);
 
   const fitWidth = useCallback(() => {
     setZoomLevel(115);
@@ -121,6 +144,7 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
       value: {
         documents,
         selectedDocument,
+        pendingDocument,
         currentPage,
         zoomLevel,
         rotation,
@@ -128,6 +152,9 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
         isUploadModalOpen,
         filterSearchQuery,
         selectDocument,
+        setPendingDocument,
+        loadPendingDocument,
+        setDocumentPageCount,
         setCurrentPage,
         setZoomLevel,
         setRotation,

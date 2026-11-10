@@ -48,7 +48,7 @@ function validateUpload(file: File): string | null {
 }
 
 export const UploadModal: React.FC = () => {
-  const { isUploadModalOpen, setUploadModalOpen, refreshDocuments, selectDocument } =
+  const { isUploadModalOpen, setUploadModalOpen, refreshDocuments, setPendingDocument } =
     useDocumentStore();
 
   const [queue, setQueue] = useState<UploadQueueItem[]>([]);
@@ -72,7 +72,7 @@ export const UploadModal: React.FC = () => {
           updateItem(item.id, { stage, progress, detail });
         });
         await refreshDocuments();
-        selectDocument(uploadedDoc);
+        setPendingDocument(uploadedDoc);
         updateItem(item.id, { stage: 'ready', progress: 100 });
       } catch (err: any) {
         updateItem(item.id, {
@@ -82,7 +82,7 @@ export const UploadModal: React.FC = () => {
         });
       }
     },
-    [refreshDocuments, selectDocument, updateItem]
+    [refreshDocuments, setPendingDocument, updateItem]
   );
 
   if (!isUploadModalOpen) return null;
@@ -283,7 +283,7 @@ export const UploadModal: React.FC = () => {
               onClick={() => setUploadModalOpen(false)}
               className="px-6 py-2.5 rounded-xl text-xs font-bold bg-[#16A34A] text-white hover:bg-[#15803D] transition-all shadow-sm cursor-pointer"
             >
-              Done — View in Workspace
+              Done
             </button>
           ) : (
             <div className="px-6 py-2.5 rounded-xl text-xs font-bold bg-[#087F8C]/10 text-[#087F8C] flex items-center gap-2">

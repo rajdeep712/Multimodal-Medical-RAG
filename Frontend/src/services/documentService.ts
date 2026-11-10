@@ -1,5 +1,9 @@
-import { MedicalDocument, MedicalDocumentPageData } from '../types/document.ts';
+import { MedicalDocument } from '../types/document.ts';
 import { API_CONFIG, ApiError } from './api.ts';
+import {
+  fetchDocumentContent,
+  getCachedDocumentContent,
+} from './documentContentCache.ts';
 
 /**
  * Real document service wired to the FastAPI backend.
@@ -42,43 +46,6 @@ function categoryForMime(mime: string): MedicalDocument['category'] {
   return 'Laboratory';
 }
 
-function buildMetadataPage(upload: UploadApiResponse): MedicalDocumentPageData {
-  const uploadedAt = new Date().toLocaleString();
-  return {
-    pageNumber: 1,
-    header: {
-      hospitalOrClinic: 'MEDILENS MEDICAL INTELLIGENCE SYSTEM',
-      department: 'Secure Encrypted Document Vault',
-      patientName: 'Document Owner',
-      patientId: upload.document_id.slice(0, 12).toUpperCase(),
-      dob: '—',
-      gender: '—',
-      collectedDate: uploadedAt,
-      reportedDate: uploadedAt,
-    },
-    contentSections: [
-      {
-        type: 'keyValue',
-        heading: 'INGESTION & METADATA OVERVIEW',
-        pairs: [
-          { key: 'File Name', value: upload.original_filename },
-          { key: 'MIME Type', value: upload.mime_type },
-          { key: 'Original Size', value: `${(upload.size / (1024 * 1024)).toFixed(2)} MB` },
-          { key: 'SHA-256 (plaintext)', value: upload.sha256 },
-        ],
-      },
-      {
-        type: 'paragraph',
-        heading: 'SECURE STORAGE',
-        paragraphs: [
-          `This document is encrypted at rest with AES-256-GCM using a per-document key wrapped by AWS KMS (RSA-OAEP), and the package is signed and stored in S3 under "${upload.document_id}". Extracted page content will appear here once the multimodal ingestion pipeline runs.`,
-        ],
-      },
-    ],
-    footerNotes: 'MediLens AI — encrypted document record. Content extraction coming soon.',
-  };
-}
-
 function documentFromUpload(upload: UploadApiResponse): MedicalDocument {
   return {
     id: upload.document_id,
@@ -88,9 +55,9 @@ function documentFromUpload(upload: UploadApiResponse): MedicalDocument {
     uploadedAt: new Date().toISOString(),
     fileSize: `${(upload.size / (1024 * 1024)).toFixed(2)} MB`,
     status: 'ready',
-    pageCount: 1,
+    pageCount: 0,
     category: categoryForMime(upload.mime_type),
-    pages: [buildMetadataPage(upload)],
+    pages: [],
   };
 }
 
@@ -103,7 +70,7 @@ function documentFromApi(row: DocumentApiResponse): MedicalDocument {
     uploadedAt: row.created_at,
     fileSize: `${(row.size / (1024 * 1024)).toFixed(2)} MB`,
     status: 'ready',
-    pageCount: 1,
+    pageCount: 0,
     category: categoryForMime(row.mime_type),
     pages: [],
   };
@@ -124,6 +91,20 @@ export const documentService = {
   async getDocumentById(id: string): Promise<MedicalDocument | null> {
     const documents = await this.listDocuments();
     return documents.find((d) => d.id === id) || null;
+  },
+
+  async getDocumentContent(id: string, signal?: AbortSignal): Promise<Blob> {
+    return fetchDocumentContent(id, signal);
+  },
+
+  async downloadDocument(id: string, originalFilename: string): Promise<void> {
+    const blob = getCachedDocumentContent(id) ?? (await fetchDocumentContent(id));
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${originalFilename.replace(/\.[^/.]+$/, '')}.pdf`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   },
 
   /**

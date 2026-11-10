@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { User } from '../types/auth.ts';
 import { authService } from '../services/authService.ts';
+import { clearDocumentContentCache } from '../services/documentContentCache.ts';
 
 /**
  * Module-singleton auth hook: one shared user state across every consumer
@@ -30,6 +31,7 @@ function notify() {
 }
 
 function setUser(user: User | null) {
+  if (!user) clearDocumentContentCache();
   currentUser = user;
   currentLoading = false;
   notify();

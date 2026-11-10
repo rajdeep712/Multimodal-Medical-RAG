@@ -16,21 +16,33 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
+import tempfile
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 import aiofiles
 import aiofiles.os
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from .. import jobs
 from ..config import ALLOWED_FILENAME_EXTENSIONS, ALLOWED_MIME_TYPES, settings
 from ..database import get_db
 from ..dependencies import get_current_user
+from ..document_conversion import ImageConversionError, convert_image_to_pdf
+from ..document_decryption import (
+    DocumentRequestCancelled,
+    SecurityError,
+    download_encrypted_package,
+    verify_and_decrypt_document,
+)
 from ..models import Document, User
 from ..protection import generate_document_id, validate_identifiers
 from ..schemas import (
@@ -70,6 +82,12 @@ def _sniffed_mime(chunk: bytes) -> str | None:
         if chunk.startswith(prefix):
             return mime_type
     return None
+
+
+def _safe_pdf_filename(original_filename: str, document_id: str) -> str:
+    stem = Path(original_filename or "").stem
+    stem = re.sub(r"[^A-Za-z0-9._ -]+", "_", stem).strip(" .")
+    return f"{stem or document_id}.pdf"
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -123,7 +141,6 @@ async def upload_document(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail="Only PDF, PNG and JPEG documents can be uploaded",
             )
-        stored_extension = ALLOWED_MIME_TYPES[content_type]
 
         # Stream the body to a temporary file while hashing it, enforcing the
         # size cap and sniffing the magic bytes of the first chunk.
@@ -193,11 +210,27 @@ async def upload_document(
                 detail="Too many documents already use this file name",
             )
 
-        # The stored original is kept forever under its document id.
+        # The canonical stored original is always a PDF under its document id.
         document_id = generate_document_id()
-        stored_path = settings.originals_dir / f"{document_id}.{stored_extension}"
+        stored_path = settings.originals_dir / f"{document_id}.pdf"
         try:
-            await aiofiles.os.rename(temp_path, stored_path)
+            if content_type == "application/pdf":
+                await aiofiles.os.rename(temp_path, stored_path)
+            else:
+                await run_in_threadpool(
+                    convert_image_to_pdf,
+                    temp_path,
+                    stored_path,
+                    content_type,
+                )
+                await _silent_remove(temp_path)
+        except ImageConversionError as exc:
+            jobs.release_filename(user.id, display_filename)
+            await _silent_remove(temp_path)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
         except Exception:
             jobs.release_filename(user.id, display_filename)
             await _silent_remove(temp_path)
@@ -291,6 +324,109 @@ async def list_documents(
         )
         for row in rows
     ]
+
+
+@router.get("/{document_id}/content")
+async def get_document_content(
+    document_id: str,
+    request: Request,
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Verify, decrypt and stream one document's canonical PDF."""
+    try:
+        validate_identifiers(str(user.id), document_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document"
+        ) from None
+
+    row = await db.scalar(
+        select(Document).where(
+            Document.document_id == document_id,
+            Document.user_id == user.id,
+        )
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document"
+        )
+
+    temporary_directory = tempfile.TemporaryDirectory(prefix="medilens-content-")
+    temporary_path = Path(temporary_directory.name)
+    pdf_path = temporary_path / "document.pdf"
+
+    def cleanup() -> None:
+        temporary_directory.cleanup()
+
+    try:
+        package = await download_encrypted_package(
+            bucket=row.s3_bucket,
+            prefix=row.s3_prefix,
+            output_directory=temporary_path,
+            is_disconnected=request.is_disconnected,
+        )
+        await verify_and_decrypt_document(
+            package=package,
+            output_path=pdf_path,
+            user_id=str(user.id),
+            document_id=document_id,
+            is_disconnected=request.is_disconnected,
+        )
+
+        filename = _safe_pdf_filename(row.original_filename, document_id)
+        headers = {
+            "Content-Disposition": (
+                f"inline; filename=\"{filename}\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+            "Content-Length": str(pdf_path.stat().st_size),
+            "Cache-Control": "private, no-store",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+        }
+
+        async def stream_pdf():
+            try:
+                async with aiofiles.open(pdf_path, "rb") as source:
+                    while True:
+                        if await request.is_disconnected():
+                            break
+                        chunk = await source.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                cleanup()
+
+        content_response = StreamingResponse(
+            stream_pdf(),
+            media_type="application/pdf",
+            headers=headers,
+        )
+        content_response.headers.raw.extend(response.headers.raw)
+        return content_response
+    except DocumentRequestCancelled:
+        cleanup()
+        raise HTTPException(status_code=499, detail="Client disconnected") from None
+    except SecurityError as exc:
+        cleanup()
+        logger.warning("Document integrity check failed for %s: %s", document_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Document integrity verification failed",
+        ) from exc
+    except HTTPException:
+        cleanup()
+        raise
+    except Exception as exc:
+        cleanup()
+        logger.exception("Document content retrieval failed for %s", document_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to load the document from secure storage",
+        ) from exc
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -176,6 +176,8 @@ async def run_document_pipeline(job: DocumentJob, *, input_path: Path) -> None:
             input_path=str(input_path),
             user_id=user_id,
             document_id=document_id,
+            source_mime_type=job.mime_type,
+            source_size=job.size,
             original_filename=job.original_filename,
         )
 
@@ -218,6 +220,8 @@ async def run_document_pipeline(job: DocumentJob, *, input_path: Path) -> None:
             original_filename=job.original_filename,
             mime_type=manifest["document"]["mime_type"],
             size=manifest["document"]["original_size"],
+            stored_mime_type=manifest["document"]["stored_mime_type"],
+            stored_size=manifest["document"]["stored_size"],
             s3_bucket=upload_result["bucket"],
             s3_prefix=s3_prefix,
         )

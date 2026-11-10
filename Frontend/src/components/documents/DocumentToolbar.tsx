@@ -7,10 +7,9 @@ import {
   Maximize2,
   Download,
   RotateCw,
-  Scaling,
-  ScanLine,
 } from 'lucide-react';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
+import { documentService } from '../../services/documentService.ts';
 
 export const DocumentToolbar: React.FC = () => {
   const {
@@ -41,17 +40,12 @@ export const DocumentToolbar: React.FC = () => {
     setRotation((rotation + 90) % 360);
   };
 
-  const handleDownload = () => {
-    // Generate clean text/json file download of document data for demo
-    const blob = new Blob([JSON.stringify(selectedDocument, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${selectedDocument.fileName}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleDownload = async () => {
+    try {
+      await documentService.downloadDocument(selectedDocument.id, selectedDocument.fileName);
+    } catch (error) {
+      console.error('Could not download the document:', error);
+    }
   };
 
   return (
