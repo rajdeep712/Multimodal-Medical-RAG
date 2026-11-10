@@ -20,6 +20,7 @@ export const API_CONFIG = {
       delete: (id: string) => `/documents/${id}`,
       content: (id: string) => `/documents/${id}/content`,
       events: (id: string) => `/documents/${id}/events`,
+      userEvents: '/documents/events',
     },
     chat: {
       query: '/chat/query',

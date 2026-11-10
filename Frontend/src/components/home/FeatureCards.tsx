@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import {
   Layers,
   Search,
@@ -54,28 +55,39 @@ export const FeatureCards: React.FC = () => {
     <section id="features" className="py-20 bg-white border-y border-[#E2E8F0]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center max-w-3xl mx-auto mb-16">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#DDF4F5] text-[#087F8C] text-xs font-semibold mb-3">
-            Core Capabilities
-          </div>
-          <h2 className="text-3xl sm:text-4xl font-extrabold text-[#123047] tracking-tight">
-            Intelligence Across Every Medical Document
-          </h2>
-          <p className="mt-4 text-base sm:text-lg text-[#64748B]">
-            From complete blood counts to complex discharge summaries and radiological impressions, MediLens AI bridges clinical documents with verified AI synthesis.
-          </p>
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: '-80px' }}
+            transition={{ duration: 0.5 }}
+          >
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#DDF4F5] text-[#087F8C] text-xs font-semibold mb-3">
+              Core Capabilities
+            </div>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-[#123047] tracking-tight">
+              Intelligence Across Every Medical Document
+            </h2>
+            <p className="mt-4 text-base sm:text-lg text-[#64748B]">
+              From complete blood counts to complex discharge summaries and radiological impressions, MediLens AI bridges clinical documents with verified AI synthesis.
+            </p>
+          </motion.div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {FEATURES.map((feat, idx) => {
             const Icon = feat.icon;
             return (
-              <div
+              <motion.div
                 key={idx}
-                className="group relative p-7 rounded-2xl bg-[#F7FAFC] border border-[#E2E8F0] hover:border-[#087F8C]/40 hover:bg-white hover:shadow-xl transition-all duration-300 flex flex-col justify-between"
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: '-60px' }}
+                transition={{ duration: 0.5, delay: (idx % 3) * 0.09 }}
+                className="group relative p-7 rounded-2xl bg-[#F7FAFC] border border-[#E2E8F0] hover:border-[#087F8C]/40 hover:bg-white hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between"
               >
                 <div>
                   <div className="flex items-center justify-between mb-5">
-                    <div className="w-12 h-12 rounded-xl bg-[#DDF4F5] text-[#087F8C] flex items-center justify-center group-hover:scale-110 group-hover:bg-[#087F8C] group-hover:text-white transition-all duration-300">
+                    <div className="w-12 h-12 rounded-xl bg-[#DDF4F5] text-[#087F8C] flex items-center justify-center group-hover:scale-110 group-hover:bg-[#087F8C] group-hover:text-white transition-all duration-300 shadow-sm">
                       <Icon className="w-6 h-6" />
                     </div>
                     <span className="text-[11px] font-semibold text-[#087F8C] bg-white px-2.5 py-1 rounded-full border border-[#BDEFE7]">
@@ -89,7 +101,7 @@ export const FeatureCards: React.FC = () => {
                     {feat.description}
                   </p>
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>

@@ -9,7 +9,9 @@ type UploadStage =
   | 'uploaded'
   | 'encrypting'
   | 'preparing'
-  | 'ready'
+  | 'secured'
+  | 'processing'
+  | 'indexed'
   | 'failed';
 
 interface UploadQueueItem {
@@ -26,7 +28,9 @@ const STAGE_LABELS: Record<Exclude<UploadStage, 'failed'>, string> = {
   uploaded: 'Upload complete — queued for encryption',
   encrypting: 'Encrypting (AES-256-GCM, KMS-wrapped key)...',
   preparing: 'Signing & uploading encrypted package to S3...',
-  ready: 'Encrypted, stored & indexed — ready',
+  secured: 'Secured — PROCESSING AND INDEXING...',
+  processing: 'PROCESSING AND INDEXING...',
+  indexed: 'INDEXED AND READY',
 };
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -67,13 +71,23 @@ export const UploadModal: React.FC = () => {
 
       updateItem(item.id, { stage: 'uploading', progress: 0 });
       try {
-        // Each file uploads concurrently — no waiting between drops.
-        const uploadedDoc = await documentService.uploadDocument(item.file, (stage, progress, detail) => {
-          updateItem(item.id, { stage, progress, detail });
-        });
-        await refreshDocuments();
-        setPendingDocument(uploadedDoc);
-        updateItem(item.id, { stage: 'ready', progress: 100 });
+        // Each file uploads concurrently — no waiting between drops. The
+        // promise resolves only after the backend reports INDEXED. No refresh
+        // is needed here: the list was refreshed on SECURED and the global
+        // SSE stream applies the INDEXED status in place.
+        const indexedDoc = await documentService.uploadDocument(
+          item.file,
+          (stage, progress, detail) => {
+            updateItem(item.id, { stage, progress, detail });
+          },
+          (securedDoc) => {
+            // The document is now in the workspace while indexing continues.
+            void refreshDocuments();
+            setPendingDocument(securedDoc);
+          }
+        );
+        setPendingDocument(indexedDoc);
+        updateItem(item.id, { stage: 'indexed', progress: 100 });
       } catch (err: any) {
         updateItem(item.id, {
           stage: 'failed',
@@ -124,10 +138,11 @@ export const UploadModal: React.FC = () => {
     return STAGE_LABELS[item.stage];
   };
 
-  const allReady = queue.length > 0 && queue.every((q) => q.stage === 'ready');
+  const allReady = queue.length > 0 && queue.every((q) => q.stage === 'indexed');
   const hasFailure = queue.some((q) => q.stage === 'failed');
   const activeCount = queue.filter(
-    (q) => q.stage !== 'ready' && q.stage !== 'failed' && q.stage !== 'queued'
+    (q) =>
+      q.stage !== 'indexed' && q.stage !== 'failed' && q.stage !== 'queued'
   ).length;
 
   return (
@@ -197,7 +212,7 @@ export const UploadModal: React.FC = () => {
           {queue.length > 0 && (
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
               {queue.map((item) => {
-                const isItemReady = item.stage === 'ready';
+                const isItemReady = item.stage === 'indexed';
                 const isFailed = item.stage === 'failed';
                 const isWorking = !isItemReady && !isFailed && item.stage !== 'queued';
 
@@ -223,7 +238,7 @@ export const UploadModal: React.FC = () => {
                         {isItemReady ? (
                           <span className="flex items-center gap-1 text-[11px] font-bold text-[#16A34A]">
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            Secured
+                            Indexed
                           </span>
                         ) : isFailed ? (
                           <span className="flex items-center gap-1 text-[11px] font-bold text-red-600">

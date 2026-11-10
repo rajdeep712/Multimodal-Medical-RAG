@@ -1,5 +1,6 @@
 import React from 'react';
-import { UploadCloud, MessageSquareText, SearchCode, ArrowRight } from 'lucide-react';
+import { motion } from 'motion/react';
+import { UploadCloud, MessageSquareText, SearchCode } from 'lucide-react';
 
 const STEPS = [
   {
@@ -45,19 +46,28 @@ export const HowItWorks: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
+          {/* Connector line between the steps (desktop) */}
+          <div
+            className="hidden md:block absolute top-24 left-[18%] right-[18%] h-px bg-gradient-to-r from-[#BDEFE7] via-[#087F8C]/40 to-[#BDEFE7]"
+            aria-hidden
+          />
           {STEPS.map((step, idx) => {
             const Icon = step.icon;
             return (
-              <div
+              <motion.div
                 key={idx}
-                className="relative bg-white rounded-2xl p-8 border border-[#E2E8F0] shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: '-60px' }}
+                transition={{ duration: 0.5, delay: idx * 0.12 }}
+                className="relative bg-white rounded-2xl p-8 border border-[#E2E8F0] shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all flex flex-col justify-between"
               >
                 <div>
                   <div className="flex items-center justify-between mb-6">
                     <span className="text-3xl font-black text-[#DDF4F5] tracking-tight">
                       {step.step}
                     </span>
-                    <div className="w-12 h-12 rounded-xl bg-[#DDF4F5] text-[#087F8C] flex items-center justify-center font-bold">
+                    <div className="relative z-10 w-12 h-12 rounded-xl bg-[#DDF4F5] text-[#087F8C] flex items-center justify-center font-bold ring-4 ring-[#F7FAFC]">
                       <Icon className="w-6 h-6" />
                     </div>
                   </div>
@@ -76,7 +86,7 @@ export const HowItWorks: React.FC = () => {
                   </span>
                   <span className="text-[#64748B] text-[11px]">{step.detail}</span>
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>

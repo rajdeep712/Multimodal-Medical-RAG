@@ -32,6 +32,14 @@ export interface DocumentSection {
   contentSummary: string;
 }
 
+export type IngestionStatus =
+  | 'SECURED'
+  | 'PROCESSING'
+  | 'INDEXED'
+  | 'ERROR'
+  | 'DELETED'
+  | null;
+
 export interface MedicalDocument {
   id: string;
   fileName: string;
@@ -42,6 +50,10 @@ export interface MedicalDocument {
   status: DocumentStatus;
   pageCount: number;
   category: 'Laboratory' | 'Prescription' | 'Clinical Summary' | 'Radiology / Imaging';
+  /** Indexed state from the backend pipeline. */
+  isReady: boolean;
+  ingestionStatus: IngestionStatus;
+  ingestionError?: string | null;
   patientRef?: string;
   doctorRef?: string;
   facilityRef?: string;

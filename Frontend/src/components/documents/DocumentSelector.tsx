@@ -6,6 +6,7 @@ import {
   Trash2,
   ChevronDown,
   Check,
+  CheckCircle2,
   FileCheck2,
   Calendar,
   Layers,
@@ -139,6 +140,12 @@ export const DocumentSelector: React.FC = () => {
                 const isSelected = selectedDocument?.id === doc.id;
                 const isConfirming = confirmingDeleteId === doc.id;
                 const isDeleting = deletingId === doc.id;
+                // Legacy rows (never indexed) show as secured, not as an
+                // endless loader.
+                const isIngestionActive =
+                  doc.ingestionStatus === 'SECURED' || doc.ingestionStatus === 'PROCESSING';
+                const isIngestionFailed = doc.ingestionStatus === 'ERROR';
+                const isIngestionDone = doc.ingestionStatus === 'INDEXED';
 
                 return (
                   <div
@@ -188,6 +195,25 @@ export const DocumentSelector: React.FC = () => {
                             {new Date(doc.uploadedAt).toLocaleDateString()}
                           </span>
                         </div>
+
+                        {isIngestionActive && (
+                          <div className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-[#087F8C]">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <span>PROCESSING AND INDEXING</span>
+                          </div>
+                        )}
+                        {isIngestionDone && (
+                          <div className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-[#16A34A]">
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>INDEXED AND READY</span>
+                          </div>
+                        )}
+                        {isIngestionFailed && (
+                          <div className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-red-600">
+                            <AlertTriangle className="w-3 h-3" />
+                            <span>INDEXING FAILED</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 

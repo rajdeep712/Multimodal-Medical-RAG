@@ -16,7 +16,15 @@ import {
 
 export interface UploadProgressCallback {
   (
-    stage: 'queued' | 'uploading' | 'uploaded' | 'encrypting' | 'preparing' | 'ready',
+    stage:
+      | 'queued'
+      | 'uploading'
+      | 'uploaded'
+      | 'encrypting'
+      | 'preparing'
+      | 'secured'
+      | 'processing'
+      | 'indexed',
     progress: number,
     detail?: string
   ): void;
@@ -37,7 +45,18 @@ interface DocumentApiResponse {
   size: number;
   s3_bucket: string;
   s3_prefix: string;
+  is_ready: boolean;
+  ingestion_status: 'SECURED' | 'PROCESSING' | 'INDEXED' | 'ERROR' | null;
+  ingestion_error: string | null;
   created_at: string;
+}
+
+interface DocumentEventPayload {
+  document_id?: string;
+  status?: string;
+  is_ready?: boolean;
+  error?: string;
+  [key: string]: unknown;
 }
 
 function categoryForMime(mime: string): MedicalDocument['category'] {
@@ -57,6 +76,9 @@ function documentFromUpload(upload: UploadApiResponse): MedicalDocument {
     status: 'ready',
     pageCount: 0,
     category: categoryForMime(upload.mime_type),
+    isReady: false,
+    ingestionStatus: 'SECURED',
+    ingestionError: null,
     pages: [],
   };
 }
@@ -72,6 +94,9 @@ function documentFromApi(row: DocumentApiResponse): MedicalDocument {
     status: 'ready',
     pageCount: 0,
     category: categoryForMime(row.mime_type),
+    isReady: row.is_ready,
+    ingestionStatus: row.ingestion_status,
+    ingestionError: row.ingestion_error,
     pages: [],
   };
 }
@@ -108,11 +133,18 @@ export const documentService = {
   },
 
   /**
-   * Upload one file and follow its server pipeline over SSE. Upload bytes
-   * progress comes from the browser XHR; pipeline stages come from the
-   * backend's UPLOADED -> ENCRYPTING -> PREPARING -> READY/ERROR events.
+   * Upload one file and follow its full server pipeline over SSE. Upload
+   * bytes progress comes from the browser XHR; pipeline stages come from the
+   * backend's UPLOADED -> ENCRYPTING -> PREPARING -> SECURED -> PROCESSING ->
+   * INDEXED/ERROR events. The promise resolves only after INDEXED; onSecured
+   * fires as soon as the encrypted document is stored so callers can surface
+   * it in the workspace immediately.
    */
-  uploadDocument(file: File, onProgress?: UploadProgressCallback): Promise<MedicalDocument> {
+  uploadDocument(
+    file: File,
+    onProgress?: UploadProgressCallback,
+    onSecured?: (document: MedicalDocument) => void
+  ): Promise<MedicalDocument> {
     return new Promise<MedicalDocument>((resolve, reject) => {
       const formData = new FormData();
       formData.append('file', file);
@@ -125,7 +157,7 @@ export const documentService = {
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
           const fraction = event.loaded / event.total;
-          onProgress?.('uploading', Math.round(fraction * 60));
+          onProgress?.('uploading', Math.round(fraction * 40));
         }
       };
 
@@ -134,7 +166,7 @@ export const documentService = {
       };
 
       const followPipeline = (upload: UploadApiResponse) => {
-        onProgress?.('uploading', 60);
+        onProgress?.('uploading', 40);
         const source = new EventSource(
           `${API_CONFIG.baseURL}${API_CONFIG.endpoints.documents.events(upload.document_id)}`,
           { withCredentials: true },
@@ -153,11 +185,19 @@ export const documentService = {
         const handle = (stage: PipelineStage, progress: number) =>
           (event: MessageEvent<string>) => {
             try {
-              const data = JSON.parse(event.data || '{}');
-              if (stage === 'ready') {
+              const data = JSON.parse(event.data || '{}') as DocumentEventPayload;
+              if (stage === 'secured' && onSecured) {
+                onSecured(documentFromUpload(upload));
+              }
+              if (stage === 'indexed') {
                 finish(() => {
-                  onProgress?.('ready', 100, data.s3_prefix);
-                  resolve(documentFromUpload(upload));
+                  onProgress?.('indexed', 100, data.status);
+                  resolve({
+                    ...documentFromUpload(upload),
+                    isReady: true,
+                    ingestionStatus: 'INDEXED',
+                    ingestionError: null,
+                  });
                 });
               } else {
                 onProgress?.(stage, progress);
@@ -167,14 +207,19 @@ export const documentService = {
             }
           };
 
-        source.addEventListener('UPLOADED', handle('uploaded', 65));
-        source.addEventListener('ENCRYPTING', handle('encrypting', 75));
-        source.addEventListener('PREPARING', handle('preparing', 85));
-        source.addEventListener('READY', handle('ready', 100));
+        source.addEventListener('UPLOADED', handle('uploaded', 50));
+        source.addEventListener('ENCRYPTING', handle('encrypting', 60));
+        source.addEventListener('PREPARING', handle('preparing', 70));
+        source.addEventListener('SECURED', handle('secured', 75));
+        source.addEventListener('PROCESSING', handle('processing', 85));
+        source.addEventListener('INDEXED', handle('indexed', 100));
+        source.addEventListener('DELETED', (event: MessageEvent<string>) => {
+          finish(() => reject(new ApiError(0, 'Document was deleted during processing')));
+        });
         source.addEventListener('ERROR', (event: MessageEvent<string>) => {
           let message = 'Processing failed on the server';
           try {
-            const data = JSON.parse(event.data || '{}');
+            const data = JSON.parse(event.data || '{}') as DocumentEventPayload;
             if (typeof data.error === 'string') message = data.error;
           } catch {
             // keep default message
@@ -182,7 +227,7 @@ export const documentService = {
           finish(() => reject(new ApiError(0, message)));
         });
         source.onerror = () => {
-          // The stream closes after READY/ERROR, which already settled the
+          // The stream closes after INDEXED/ERROR, which already settled the
           // promise; an error here means the connection dropped early.
           setTimeout(() => {
             if (!settled) {
