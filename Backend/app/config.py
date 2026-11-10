@@ -46,6 +46,34 @@ class Settings(BaseSettings):
     max_image_pixels: int = 50_000_000
     uploads_dir: Path = BASE_DIR / "uploads"
 
+    celery_broker_url: str = "redis://127.0.0.1:6379/0"
+    celery_result_backend: str = "redis://127.0.0.1:6379/1"
+    document_events_redis_url: str | None = None
+
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+    qdrant_collection: str = "medical_documents"
+
+    text_embedding_base_url: str = "http://127.0.0.1:1234/v1"
+    text_embedding_model: str = "text-embedding-medembed-large-v0.1"
+    text_embedding_api_key: str = ""
+
+    image_analysis_base_url: str = "https://api.xkiro.com/v1"
+    image_analysis_model: str = "mistralai/mistral-large-2512"
+    image_analysis_api_key: str = ""
+
+    pii_api_url: str = ""
+    pii_api_timeout_seconds: float = 180.0
+    biomedclip_images_batch_url: str = "http://127.0.0.1:8001/v1/embeddings/images/batch"
+
+    ingestion_batch_size: int = 3
+    image_ingestion_batch_size: int = 4
+    image_analysis_concurrency: int = 5
+    unstructured_warmup_enabled: bool = True
+
+    logfire_api_key: str = ""
+    logfire_environment: str = "development"
+
     token_encryption_key: str
     refresh_token_max_lifetime_days: int = 30
     access_token_leeway_seconds: int = 30
@@ -124,6 +152,10 @@ class Settings(BaseSettings):
         if sslmode in {"allow", "prefer", "require", "verify-ca", "verify-full"}:
             return {"ssl": sslmode}
         return {}
+
+    @property
+    def events_redis_url(self) -> str:
+        return self.document_events_redis_url or self.celery_broker_url
 
     @property
     def originals_dir(self) -> Path:

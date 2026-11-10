@@ -68,6 +68,9 @@ class DocumentResponse(BaseModel):
     size: int
     s3_bucket: str
     s3_prefix: str
+    is_ready: bool
+    ingestion_status: str | None = None
+    ingestion_error: str | None = None
     created_at: datetime
 
 

@@ -9,7 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from .aws import close_aws, init_aws
 from .config import settings
 from .database import engine, init_db
+from .events import close_events_redis
 from .exceptions import SessionExpiredError, session_expired_handler
+from .observability import configure_observability
 from .routers import auth, documents, private
 from .services import close_auth0_client
 
@@ -18,11 +20,13 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    configure_observability("medical-rag-api")
     settings.ensure_upload_dirs()
     await init_aws()
     await init_db()
     yield
     await close_auth0_client()
+    await close_events_redis()
     await close_aws()
     await engine.dispose()
 

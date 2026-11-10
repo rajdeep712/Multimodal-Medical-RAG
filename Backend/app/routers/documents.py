@@ -32,7 +32,7 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from .. import jobs
+from .. import events, jobs
 from ..config import ALLOWED_FILENAME_EXTENSIONS, ALLOWED_MIME_TYPES, settings
 from ..database import get_db
 from ..dependencies import get_current_user
@@ -327,6 +327,9 @@ async def list_documents(
             size=row.original_size,
             s3_bucket=row.s3_bucket,
             s3_prefix=row.s3_prefix,
+            is_ready=row.is_ready,
+            ingestion_status=row.ingestion_status,
+            ingestion_error=row.ingestion_error,
             created_at=row.created_at,
         )
         for row in rows
@@ -521,26 +524,126 @@ async def delete_document(
             detail="Could not remove the encrypted document from storage",
         )
 
+    # Stop an in-flight indexing task, then remove the Qdrant points. Legacy
+    # documents (never indexed) have no points and no task to revoke.
+    try:
+        from ..celery_app import celery_app
+
+        celery_app.control.revoke(document_id)
+    except Exception:
+        logger.warning("Could not revoke ingestion task for %s", document_id)
+
+    # Capture the in-memory job before the row disappears so its SSE
+    # subscribers can be terminated with a terminal event.
+    job = jobs.get_job(document_id)
+
+    indexed_or_partial = row.qdrant_point_ids or row.ingestion_status in {
+        jobs.STATUS_PROCESSING,
+        jobs.STATUS_INDEXED,
+    }
+    if indexed_or_partial:
+        try:
+            from ..ingestion.qdrant_store import QdrantStore
+
+            store = QdrantStore()
+            try:
+                await store.delete_points(list(row.qdrant_point_ids or []))
+                await store.delete_document_points(str(user.id), document_id)
+            finally:
+                await store.close()
+        except Exception as exc:
+            logger.exception("Qdrant cleanup failed for document %s", document_id)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Could not remove the document from the search index",
+            ) from exc
+
     await db.delete(row)
     await db.commit()
     response.status_code = status.HTTP_204_NO_CONTENT
+
+    # Terminal event: closes any open per-document SSE stream and lets the
+    # global stream remove the document from other views. Without this the
+    # modal spinner would spin forever after a delete during processing.
+    if job is not None and job.user_uuid == user.id:
+        await job.emit_and_publish(jobs.STATUS_DELETED, is_ready=False)
+    else:
+        try:
+            await events.publish_document_event(
+                str(user.id), document_id, jobs.STATUS_DELETED, is_ready=False
+            )
+        except Exception:
+            logger.warning("Could not publish DELETED event for %s", document_id)
+
     return response
+
+
+@router.get("/events")
+async def user_document_events(
+    request: Request,
+    response: Response,
+    user: User = Depends(get_current_user),
+) -> EventSourceResponse:
+    """User-wide SSE stream of every document status change.
+
+    The dropdown subscribes here once; events published by the upload
+    pipelines and the Celery ingestion worker (via Redis) update each visible
+    document in place. Stays open until the client disconnects.
+    """
+
+    async def event_stream():
+        try:
+            async for event in events.subscribe_user_events(str(user.id)):
+                if await request.is_disconnected():
+                    return
+                yield {
+                    "event": str(event.get("status", "ERROR")),
+                    "data": json.dumps(event),
+                }
+        except asyncio.CancelledError:
+            # Client disconnected; uvicorn cancels the handler task.
+            return
+
+    event_response = EventSourceResponse(event_stream())
+    event_response.headers.raw.extend(response.headers.raw)
+    return event_response
 
 
 @router.get("/{document_id}/events")
 async def document_events(
     document_id: str,
+    request: Request,
     response: Response,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> EventSourceResponse:
     """SSE stream of one document's processing status.
 
-    Buffered events are replayed first (so a client connecting after
-    UPLOADED still sees it), then live events are streamed until a terminal
-    READY/ERROR event closes the stream.
+    Combines three sources: the in-memory job buffer (upload phase replay),
+    a live queue on that job, and Redis events from the ingestion worker. If
+    no job exists (server restart or an older document), the current DB state
+    is sent as a snapshot and live Redis events follow. The stream closes on
+    INDEXED or ERROR.
     """
+    try:
+        validate_identifiers(str(user.id), document_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document"
+        ) from None
+
     job = jobs.get_job(document_id)
-    if job is None or job.user_uuid != user.id:
+    row = await db.scalar(
+        select(Document).where(
+            Document.document_id == document_id,
+            Document.user_id == user.id,
+        )
+    )
+    if job is None and row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document upload"
+        )
+    if job is not None and job.user_uuid != user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document upload"
         )
@@ -548,31 +651,94 @@ async def document_events(
     async def event_stream():
         # Snapshot the buffer and register the subscriber queue without an
         # await in between, so no event can be missed or duplicated.
-        replayed = list(job.events)
-        queue: asyncio.Queue[dict[str, object]] | None = None
-        if not job.done:
-            queue = asyncio.Queue()
-            job.queues.add(queue)
+        replayed: list[dict[str, object]] = []
+        job_queue: asyncio.Queue[dict[str, object]] | None = None
+        if job is not None:
+            replayed = list(job.events)
+            if not job.done:
+                job_queue = asyncio.Queue()
+                job.queues.add(job_queue)
+
+        merged: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+
+        async def drain_job_queue() -> None:
+            if job_queue is None:
+                return
+            try:
+                while True:
+                    merged.put_nowait(await job_queue.get())
+            except asyncio.CancelledError:
+                raise
+
+        async def drain_redis() -> None:
+            try:
+                async for event in events.subscribe_user_events(str(user.id)):
+                    if event.get("document_id") == document_id:
+                        merged.put_nowait(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Redis subscription failed for %s", document_id)
+
+        pump_tasks: list[asyncio.Task] = [
+            asyncio.create_task(drain_redis())
+        ]
+        if job_queue is not None:
+            pump_tasks.append(asyncio.create_task(drain_job_queue()))
+
         try:
             for event in replayed:
-                yield {
-                    "event": str(event["status"]),
-                    "data": json.dumps(event),
-                }
-            if job.done:
-                return
-            assert queue is not None
-            while True:
-                event = await queue.get()
-                yield {
-                    "event": str(event["status"]),
-                    "data": json.dumps(event),
-                }
-                if event["status"] in jobs.TERMINAL_STATUSES:
+                if await request.is_disconnected():
                     return
+                yield {
+                    "event": str(event["status"]),
+                    "data": json.dumps(event),
+                }
+
+            if job is None and row is not None:
+                # No in-memory job (restart or legacy row): send the stored
+                # state as the first event, then follow live Redis events.
+                snapshot_status = row.ingestion_status or (
+                    jobs.STATUS_INDEXED if row.is_ready else jobs.STATUS_SECURED
+                )
+                snapshot = {
+                    "document_id": document_id,
+                    "status": snapshot_status,
+                    "is_ready": row.is_ready,
+                }
+                if row.ingestion_error:
+                    snapshot["error"] = row.ingestion_error
+                if await request.is_disconnected():
+                    return
+                yield {
+                    "event": snapshot_status,
+                    "data": json.dumps(snapshot),
+                }
+                if snapshot_status in jobs.TERMINAL_STATUSES:
+                    return
+
+            if job is not None and job.done:
+                return
+
+            while True:
+                event = await merged.get()
+                if await request.is_disconnected():
+                    return
+                yield {
+                    "event": str(event.get("status", jobs.STATUS_ERROR)),
+                    "data": json.dumps(event),
+                }
+                if event.get("status") in jobs.TERMINAL_STATUSES:
+                    return
+        except asyncio.CancelledError:
+            return
         finally:
-            if queue is not None:
-                job.queues.discard(queue)
+            if job_queue is not None and job is not None:
+                job.queues.discard(job_queue)
+            for task in pump_tasks:
+                task.cancel()
+            # Absorb the cancellations so nothing surfaces as an error.
+            await asyncio.gather(*pump_tasks, return_exceptions=True)
 
     event_response = EventSourceResponse(event_stream())
     event_response.headers.raw.extend(response.headers.raw)

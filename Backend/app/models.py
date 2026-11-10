@@ -8,12 +8,14 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -114,6 +116,15 @@ class Document(Base):
     ## SHA-256 of the encrypted copy, recorded from the signed manifest.
     ciphertext_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
 
+    is_ready: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    ingestion_status: Mapped[str | None] = mapped_column(String(32))
+    ingestion_error: Mapped[str | None] = mapped_column(Text)
+    qdrant_point_ids: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb"), nullable=False
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -126,6 +137,41 @@ class Document(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="documents")
+    images: Mapped[list[DocumentImage]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Document id={self.document_id} user_id={self.user_id}>"
+
+
+class DocumentImage(Base):
+    __tablename__ = "images"
+
+    document_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    image_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+
+    image_base64: Mapped[str] = mapped_column(Text, nullable=False)
+    image_type: Mapped[str | None] = mapped_column(String(64))
+    summary: Mapped[str | None] = mapped_column(Text)
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    coordinates: Mapped[dict | list | None] = mapped_column(JSONB)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[Document] = relationship(back_populates="images")
+
+    def __repr__(self) -> str:
+        return f"<DocumentImage document_id={self.document_id} image_id={self.image_id}>"
