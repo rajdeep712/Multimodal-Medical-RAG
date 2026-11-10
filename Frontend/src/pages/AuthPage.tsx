@@ -1,14 +1,23 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { FileSearch, CheckCircle2, Shield, Sparkles, Activity, FileText } from 'lucide-react';
 import { LoginForm } from '../components/auth/LoginForm.tsx';
 import { SignupForm } from '../components/auth/SignupForm.tsx';
+import { useAuth } from '../stores/useAuthStore.ts';
 
 export const AuthPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { isAuthenticated, loading } = useAuth();
   const isInitialSignup = location.pathname.includes('/signup');
   const [isSignup, setIsSignup] = useState<boolean>(isInitialSignup);
+
+  useEffect(() => {
+    if (!loading && isAuthenticated) {
+      const from = (location.state as { from?: string } | null)?.from;
+      navigate(from || '/workspace', { replace: true });
+    }
+  }, [isAuthenticated, loading, location.state, navigate]);
 
   return (
     <div className="min-h-screen w-full flex flex-col lg:flex-row bg-[#F7FAFC]">

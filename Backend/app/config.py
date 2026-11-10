@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     access_cookie_name: str = "rag_access_token"
     session_cookie_name: str = "rag_session_token"
     access_cookie_path: str = "/api"
-    session_cookie_path: str = "/api/auth"
+    session_cookie_path: str = "/api"
 
     @field_validator("auth0_domain")
     @classmethod

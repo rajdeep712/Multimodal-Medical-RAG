@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .aws import close_aws, init_aws
 from .config import settings
 from .database import engine, init_db
+from .exceptions import SessionExpiredError, session_expired_handler
 from .routers import auth, documents, private
 from .services import close_auth0_client
 
@@ -32,6 +33,8 @@ app = FastAPI(
     description="Secure FastAPI backend with Auth0 authentication and encrypted refresh-token storage.",
     lifespan=lifespan,
 )
+
+app.add_exception_handler(SessionExpiredError, session_expired_handler)
 
 app.add_middleware(
     CORSMiddleware,

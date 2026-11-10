@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import jwt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from jwt import PyJWKClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from .auth0 import Auth0Error
 from .config import settings
+from .cookies import set_access_cookie, set_session_cookie
 from .database import get_db
+from .exceptions import SessionExpiredError
 from .models import User
+from .services import get_auth0_client
+from .sessions import refresh_session
+
+logger = logging.getLogger(__name__)
 
 _jwks_client: PyJWKClient | None = None
 
@@ -55,28 +63,67 @@ async def verify_origin(request: Request) -> None:
         )
 
 
-async def get_token_claims(request: Request) -> dict[str, Any]:
+async def get_token_claims(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
     token = request.cookies.get(settings.access_cookie_name)
-    if not token:
-        raise _unauthorized("Missing access token cookie")
+    detail = "Missing access token cookie"
+
+    if token:
+        try:
+            settings.require_auth0()
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            ) from exc
+
+        try:
+            return await run_in_threadpool(_decode_access_token, token)
+        except jwt.ExpiredSignatureError:
+            detail = "Access token has expired"
+        except (jwt.PyJWTError, jwt.PyJWKClientError):
+            detail = "Access token is invalid"
+        except Exception as exc:  # network/JWKS retrieval failures
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to validate the access token right now",
+            ) from exc
+
+    session_token = request.cookies.get(settings.session_cookie_name)
+    if not session_token:
+        raise _unauthorized(detail)
 
     try:
-        settings.require_auth0()
-    except RuntimeError as exc:
+        refreshed = await refresh_session(
+            session_token,
+            db,
+            get_auth0_client(),
+        )
+    except SessionExpiredError:
+        raise
+    except Auth0Error as exc:
+        logger.warning("Unable to refresh the access token: %s", exc)
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to refresh the session right now",
         ) from exc
 
+    set_access_cookie(response, refreshed.access_token, refreshed.expires_in)
+    set_session_cookie(response, session_token, refreshed.refresh_expires_at)
+
     try:
-        return await run_in_threadpool(_decode_access_token, token)
-    except jwt.ExpiredSignatureError as exc:
-        raise _unauthorized("Access token has expired") from exc
+        return await run_in_threadpool(
+            _decode_access_token, refreshed.access_token
+        )
     except (jwt.PyJWTError, jwt.PyJWKClientError) as exc:
-        raise _unauthorized("Access token is invalid") from exc
+        logger.error("Refreshed access token is invalid for user %s", refreshed.user.id)
+        raise SessionExpiredError("Refreshed access token is invalid") from exc
     except Exception as exc:  # network/JWKS retrieval failures
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Unable to validate the access token right now",
+            detail="Unable to validate the refreshed access token right now",
         ) from exc
 
 

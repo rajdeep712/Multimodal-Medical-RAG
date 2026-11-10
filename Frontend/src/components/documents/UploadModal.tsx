@@ -29,6 +29,24 @@ const STAGE_LABELS: Record<Exclude<UploadStage, 'failed'>, string> = {
   ready: 'Encrypted, stored & indexed — ready',
 };
 
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg']);
+const ALLOWED_UPLOAD_MIME_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg']);
+
+function validateUpload(file: File): string | null {
+  const name = file.name.toLowerCase();
+  const extension = name.slice(name.lastIndexOf('.'));
+  if (
+    !ALLOWED_UPLOAD_EXTENSIONS.has(extension) ||
+    !ALLOWED_UPLOAD_MIME_TYPES.has(file.type)
+  ) {
+    return 'Only PDF, PNG and JPEG documents can be uploaded';
+  }
+  if (file.size === 0) return 'The selected file is empty';
+  if (file.size > MAX_UPLOAD_BYTES) return 'File exceeds the 10 MB limit';
+  return null;
+}
+
 export const UploadModal: React.FC = () => {
   const { isUploadModalOpen, setUploadModalOpen, refreshDocuments, selectDocument } =
     useDocumentStore();
@@ -70,15 +88,20 @@ export const UploadModal: React.FC = () => {
   if (!isUploadModalOpen) return null;
 
   const handleFilesAdded = (files: FileList | File[]) => {
-    const newItems: UploadQueueItem[] = Array.from(files).map((f) => ({
-      file: f,
-      id: `queue_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      stage: 'queued',
-      progress: 0,
-    }));
+    const newItems: UploadQueueItem[] = Array.from(files).map((f) => {
+      const error = validateUpload(f);
+      return {
+        file: f,
+        id: `queue_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        stage: error ? 'failed' : 'queued',
+        progress: 0,
+        detail: error ?? undefined,
+      } satisfies UploadQueueItem;
+    });
     setQueue((prev) => [...prev, ...newItems]);
-    // Dropped files start uploading immediately and in parallel.
-    newItems.forEach((item) => {
+    // Only valid files start uploading immediately; invalid ones are shown
+    // with a clear message instead of being sent and reset by the proxy.
+    newItems.filter((item) => item.stage === 'queued').forEach((item) => {
       void startUpload(item);
     });
   };

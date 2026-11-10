@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +29,12 @@ from ..schemas import (
     UserResponse,
 )
 from ..services import get_auth0_client, token_cipher
+from ..sessions import (
+    RefreshedSession,
+    clear_refresh_cache,
+    clear_session,
+    refresh_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,13 +170,6 @@ async def _issue_session(
     return session_token, user.refresh_token_expires_at
 
 
-def _clear_session(user: User) -> None:
-    user.session_token_hash = None
-    user.refresh_token_encrypted = None
-    user.refresh_token_expires_at = None
-    user.refresh_token_updated_at = None
-
-
 def _session_response(
     user: User, tokens: dict[str, Any], refresh_expires_at: datetime
 ) -> SessionResponse:
@@ -194,6 +192,15 @@ def _session_response(
     )
 
 
+def _refreshed_session_response(result: RefreshedSession) -> SessionResponse:
+    return SessionResponse(
+        user=UserResponse.model_validate(result.user),
+        access_expires_at=datetime.now(timezone.utc)
+        + timedelta(seconds=result.expires_in),
+        session_expires_at=result.refresh_expires_at,
+    )
+
+
 def _set_auth_cookies(
     response: Response,
     tokens: dict[str, Any],
@@ -206,15 +213,6 @@ def _set_auth_cookies(
         int(tokens["expires_in"]),
     )
     set_session_cookie(response, session_token, refresh_expires_at)
-
-
-def _session_expired_response(detail: str) -> JSONResponse:
-    response = JSONResponse(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        content={"detail": detail},
-    )
-    clear_auth_cookies(response)
-    return response
 
 
 @router.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
@@ -315,61 +313,17 @@ async def refresh(
     session_token: str = Depends(get_session_token),
     db: AsyncSession = Depends(get_db),
     auth0: Auth0Client = Depends(get_auth0_client),
-) -> SessionResponse | JSONResponse:
+) -> SessionResponse:
     _require_auth0()
 
-    token_hash = hash_session_token(session_token)
-    user = await db.scalar(select(User).where(User.session_token_hash == token_hash))
-    if user is None or not user.refresh_token_encrypted:
-        return _session_expired_response("Invalid or expired session")
-
-    now = datetime.now(timezone.utc)
-    if user.refresh_token_expires_at is None or user.refresh_token_expires_at <= now:
-        _clear_session(user)
-        await db.commit()
-        return _session_expired_response(
-            "Refresh token has expired. Please log in again."
-        )
-
     try:
-        refresh_token = token_cipher.decrypt(user.refresh_token_encrypted)
-    except Exception:
-        logger.error("Unable to decrypt refresh token for user %s", user.id)
-        _clear_session(user)
-        await db.commit()
-        return _session_expired_response(
-            "Stored refresh token is corrupted. Please log in again."
-        )
-
-    try:
-        tokens = await auth0.refresh(refresh_token)
+        result = await refresh_session(session_token, db, auth0)
     except Auth0Error as exc:
-        if exc.status_code in (400, 401, 403):
-            _clear_session(user)
-            await db.commit()
-            return _session_expired_response(
-                "Refresh token is expired or has been revoked. Please log in again."
-            )
         raise _auth0_http_error(exc) from exc
 
-    if "refresh_token" in tokens:
-        user.refresh_token_encrypted = token_cipher.encrypt(str(tokens["refresh_token"]))
-        user.refresh_token_updated_at = now
-
-    await db.commit()
-    await db.refresh(user)
-
-    refresh_expires_at = user.refresh_token_expires_at
-    if refresh_expires_at is None:
-        _clear_session(user)
-        await db.commit()
-        return _session_expired_response(
-            "Refresh token has expired. Please log in again."
-        )
-
-    session = _session_response(user, tokens, refresh_expires_at)
-    _set_auth_cookies(response, tokens, session_token, refresh_expires_at)
-    return session
+    set_access_cookie(response, result.access_token, result.expires_in)
+    set_session_cookie(response, session_token, result.refresh_expires_at)
+    return _refreshed_session_response(result)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -381,6 +335,7 @@ async def logout(
     _require_auth0()
 
     if session_token:
+        clear_refresh_cache(session_token)
         token_hash = hash_session_token(session_token)
         user = await db.scalar(select(User).where(User.session_token_hash == token_hash))
         if user is not None:
@@ -392,7 +347,7 @@ async def logout(
                     logger.warning(
                         "Unable to revoke refresh token for user %s: %s", user.id, exc
                     )
-            _clear_session(user)
+            clear_session(user)
             await db.commit()
 
     response = Response(status_code=status.HTTP_204_NO_CONTENT)

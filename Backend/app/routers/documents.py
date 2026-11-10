@@ -296,6 +296,7 @@ async def list_documents(
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(
     document_id: str,
+    response: Response,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
@@ -328,12 +329,14 @@ async def delete_document(
 
     await db.delete(row)
     await db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.get("/{document_id}/events")
 async def document_events(
     document_id: str,
+    response: Response,
     user: User = Depends(get_current_user),
 ) -> EventSourceResponse:
     """SSE stream of one document's processing status.
@@ -377,4 +380,6 @@ async def document_events(
             if queue is not None:
                 job.queues.discard(queue)
 
-    return EventSourceResponse(event_stream())
+    event_response = EventSourceResponse(event_stream())
+    event_response.headers.raw.extend(response.headers.raw)
+    return event_response
