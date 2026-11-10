@@ -12,6 +12,7 @@ import {
   Activity,
   Plus,
   AlertTriangle,
+  Loader2,
 } from 'lucide-react';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
 import { MedicalDocument } from '../../types/document.ts';
@@ -27,14 +28,16 @@ export const DocumentSelector: React.FC = () => {
 
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false);
-        setDeletingId(null);
+        setConfirmingDeleteId(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -64,7 +67,11 @@ export const DocumentSelector: React.FC = () => {
     <div className="relative" ref={containerRef}>
       {/* Trigger Button */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          setIsOpen((open) => !open);
+          setDeleteError('');
+          if (deletingId) setConfirmingDeleteId(null);
+        }}
         className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-[#CBD5E1] hover:border-[#087F8C] hover:bg-[#F8FAFC] transition-all shadow-2xs group cursor-pointer"
         title="Browse and switch uploaded medical documents"
       >
@@ -130,6 +137,7 @@ export const DocumentSelector: React.FC = () => {
             ) : (
               filteredDocs.map((doc) => {
                 const isSelected = selectedDocument?.id === doc.id;
+                const isConfirming = confirmingDeleteId === doc.id;
                 const isDeleting = deletingId === doc.id;
 
                 return (
@@ -141,6 +149,7 @@ export const DocumentSelector: React.FC = () => {
                         : 'hover:bg-[#F8FAFC] border border-transparent'
                     }`}
                     onClick={() => {
+                      if (deletingId) return;
                       selectDocument(doc);
                       setIsOpen(false);
                     }}
@@ -185,18 +194,39 @@ export const DocumentSelector: React.FC = () => {
                     {/* Delete action with confirmation */}
                     <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
                       {isDeleting ? (
+                        <div
+                          className="flex items-center gap-1 text-[10px] font-bold text-red-600"
+                          role="status"
+                        >
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Deleting</span>
+                        </div>
+                      ) : isConfirming ? (
                         <div className="flex items-center gap-1">
                           <button
                             onClick={async () => {
-                              await deleteDocument(doc.id);
-                              setDeletingId(null);
+                              if (deletingId) return;
+                              setDeletingId(doc.id);
+                              setConfirmingDeleteId(null);
+                              setDeleteError('');
+                              try {
+                                await deleteDocument(doc.id);
+                              } catch (error) {
+                                setDeleteError(
+                                  error instanceof Error
+                                    ? error.message
+                                    : 'Could not delete the document'
+                                );
+                              } finally {
+                                setDeletingId(null);
+                              }
                             }}
                             className="text-[10px] bg-red-600 text-white font-bold px-2 py-1 rounded-md hover:bg-red-700 transition-colors cursor-pointer"
                           >
                             Confirm
                           </button>
                           <button
-                            onClick={() => setDeletingId(null)}
+                            onClick={() => setConfirmingDeleteId(null)}
                             className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-1 rounded-md hover:bg-slate-300 transition-colors cursor-pointer"
                           >
                             Cancel
@@ -204,8 +234,12 @@ export const DocumentSelector: React.FC = () => {
                         </div>
                       ) : (
                         <button
-                          onClick={() => setDeletingId(doc.id)}
-                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all cursor-pointer"
+                          onClick={() => {
+                            setConfirmingDeleteId(doc.id);
+                            setDeleteError('');
+                          }}
+                          disabled={Boolean(deletingId)}
+                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           title="Delete document"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -217,6 +251,16 @@ export const DocumentSelector: React.FC = () => {
               })
             )}
           </div>
+
+          {deleteError && (
+            <div
+              className="mx-3 mb-1 flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[10px] font-medium text-red-700"
+              role="alert"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+              <span>{deleteError}</span>
+            </div>
+          )}
 
           {/* Footer Upload CTA */}
           <div className="pt-2 px-3 border-t border-[#F1F5F9] mt-1">

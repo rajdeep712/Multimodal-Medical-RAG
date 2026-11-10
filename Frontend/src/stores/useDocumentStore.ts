@@ -1,4 +1,12 @@
-import { useState, useCallback, createContext, useContext, ReactNode, useEffect } from 'react';
+import {
+  useState,
+  useCallback,
+  createContext,
+  useContext,
+  ReactNode,
+  useEffect,
+  useRef,
+} from 'react';
 import React from 'react';
 import { MedicalDocument } from '../types/document.ts';
 import { documentService } from '../services/documentService.ts';
@@ -35,6 +43,7 @@ const DocumentContext = createContext<DocumentState | null>(null);
 export function DocumentProvider({ children }: { children: ReactNode }) {
   const [documents, setDocuments] = useState<MedicalDocument[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<MedicalDocument | null>(null);
+  const selectedDocumentIdRef = useRef<string | null>(null);
   const [pendingDocument, setPendingDocumentState] = useState<MedicalDocument | null>(null);
   const [currentPage, setCurrentPageState] = useState<number>(1);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
@@ -42,6 +51,10 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isUploadModalOpen, setUploadModalOpen] = useState<boolean>(false);
   const [filterSearchQuery, setFilterSearchQuery] = useState<string>('');
+
+  useEffect(() => {
+    selectedDocumentIdRef.current = selectedDocument?.id ?? null;
+  }, [selectedDocument?.id]);
 
   const refreshDocuments = useCallback(async () => {
     setIsLoading(true);
@@ -121,11 +134,12 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
   const deleteDocument = useCallback(async (id: string) => {
     const success = await documentService.deleteDocument(id);
     if (success) {
+      const wasSelected = selectedDocumentIdRef.current === id;
       evictDocumentContent(id);
       setDocuments((prev) => prev.filter((d) => d.id !== id));
       setSelectedDocument((prev) => (prev?.id === id ? null : prev));
       setPendingDocumentState((prev) => (prev?.id === id ? null : prev));
-      setCurrentPageState(1);
+      if (wasSelected) setCurrentPageState(1);
     }
     return success;
   }, []);

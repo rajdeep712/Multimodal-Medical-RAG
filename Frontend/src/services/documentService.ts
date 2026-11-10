@@ -214,9 +214,16 @@ export const documentService = {
       `${API_CONFIG.baseURL}${API_CONFIG.endpoints.documents.delete(id)}`,
       { method: 'DELETE', credentials: 'include' },
     );
-    if (response.status === 404) return false;
+    if (response.status === 404) return true;
     if (!response.ok) {
-      throw new ApiError(response.status, 'Could not delete the document');
+      let detail = `Could not delete the document (${response.status})`;
+      try {
+        const body = await response.json();
+        if (typeof body?.detail === 'string') detail = body.detail;
+      } catch {
+        // keep the status-based message
+      }
+      throw new ApiError(response.status, detail);
     }
     return true;
   },

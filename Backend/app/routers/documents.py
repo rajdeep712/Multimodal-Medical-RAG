@@ -77,6 +77,13 @@ async def _silent_remove(path: Path) -> None:
         pass
 
 
+async def _remove_if_present(path: Path) -> None:
+    try:
+        await aiofiles.os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
 def _sniffed_mime(chunk: bytes) -> str | None:
     for prefix, mime_type in MAGIC_PREFIXES:
         if chunk.startswith(prefix):
@@ -436,8 +443,17 @@ async def delete_document(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Remove a document: its DB row and the three S3 package objects."""
-    validate_identifiers(user.id.hex, document_id)
+    """Remove a document's local files, S3 package, and DB row.
+
+    Cleanup must succeed before the database row is removed. If storage cleanup
+    fails, the row remains so the client can retry the deletion.
+    """
+    try:
+        validate_identifiers(user.id.hex, document_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document"
+        ) from None
 
     row = await db.scalar(
         select(Document).where(
@@ -450,18 +466,60 @@ async def delete_document(
             status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document"
         )
 
-    # Best-effort S3 cleanup; the DB row is removed regardless.
-    try:
-        from .. import aws
+    from .. import aws
 
-        if aws.s3 is not None:
-            bucket = await aws.s3.Bucket(row.s3_bucket)
-            for suffix in ("ciphertext.bin", "signature.bin", "manifest.json"):
-                await bucket.delete_objects(
-                    Delete={"Objects": [{"Key": f"{row.s3_prefix}/{suffix}"}], "Quiet": True}
-                )
-    except Exception:
+    if aws.s3 is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage is not available right now",
+        )
+
+    try:
+        await _remove_if_present(settings.originals_dir / f"{document_id}.pdf")
+        await _remove_if_present(settings.encrypted_dir / f"{document_id}.ciphertext")
+    except Exception as exc:
+        logger.exception("Local file cleanup failed for document %s", document_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not remove the stored document files",
+        ) from exc
+
+    try:
+        bucket = await aws.s3.Bucket(row.s3_bucket)
+        delete_response = await bucket.delete_objects(
+            Delete={
+                "Objects": [
+                    {"Key": f"{row.s3_prefix}/{suffix}"}
+                    for suffix in ("ciphertext.bin", "signature.bin", "manifest.json")
+                ],
+                "Quiet": False,
+            }
+        )
+    except Exception as exc:
         logger.exception("S3 cleanup failed for document %s", document_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not remove the encrypted document from storage",
+        ) from exc
+
+    delete_errors = delete_response.get("Errors") or []
+    if delete_errors:
+        logger.error(
+            "S3 reported deletion errors for document %s: %s",
+            document_id,
+            [
+                {
+                    "key": item.get("Key"),
+                    "code": item.get("Code"),
+                    "message": item.get("Message"),
+                }
+                for item in delete_errors
+            ],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not remove the encrypted document from storage",
+        )
 
     await db.delete(row)
     await db.commit()
