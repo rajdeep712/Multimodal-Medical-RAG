@@ -1,0 +1,6 @@
+{
+  "name": "MediLens AI",
+  "description": "Multimodal Medical RAG platform for intelligent medical document understanding, clinical search, and interactive citation navigation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
