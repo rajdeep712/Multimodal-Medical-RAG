@@ -6,9 +6,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .aws import close_aws, init_aws
 from .config import settings
 from .database import engine, init_db
-from .routers import auth, private
+from .routers import auth, documents, private
 from .services import close_auth0_client
 
 logging.basicConfig(level=logging.INFO)
@@ -16,9 +17,12 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    settings.ensure_upload_dirs()
+    await init_aws()
     await init_db()
     yield
     await close_auth0_client()
+    await close_aws()
     await engine.dispose()
 
 
@@ -38,6 +42,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
 app.include_router(private.router, prefix="/api", tags=["private"])
 
 

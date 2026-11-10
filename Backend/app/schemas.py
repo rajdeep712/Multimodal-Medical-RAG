@@ -51,3 +51,30 @@ class PrivateResponse(BaseModel):
     user: UserResponse
     token_expires_at: datetime
     token_scopes: list[str]
+
+
+class DocumentUploadResponse(BaseModel):
+    document_id: str
+    original_filename: str
+    size: int
+    mime_type: str
+    sha256: str
+
+
+class DocumentResponse(BaseModel):
+    document_id: str
+    original_filename: str
+    mime_type: str
+    size: int
+    s3_bucket: str
+    s3_prefix: str
+    created_at: datetime
+
+
+class DuplicateCheckRequest(BaseModel):
+    sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+
+
+class DuplicateCheckResponse(BaseModel):
+    exists: bool
+    document_id: str | None = None

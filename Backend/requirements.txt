@@ -7,3 +7,7 @@ asyncpg>=0.30.0
 httpx>=0.28.0
 cryptography>=44.0.0
 PyJWT[crypto]>=2.10.0
+aioboto3>=13.0.0
+python-multipart>=0.0.20
+aiofiles>=24.1.0
+sse-starlette>=2.1.3

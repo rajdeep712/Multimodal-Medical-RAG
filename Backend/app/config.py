@@ -9,6 +9,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Allowed upload types: MIME type -> extension used for the stored file name.
+ALLOWED_MIME_TYPES: dict[str, str] = {
+    "application/pdf": "pdf",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+}
+
+ALLOWED_FILENAME_EXTENSIONS: set[str] = {".pdf", ".png", ".jpg", ".jpeg"}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -24,6 +33,16 @@ class Settings(BaseSettings):
     auth0_client_secret: str = ""
     auth0_audience: str = ""
     auth0_connection: str = "Username-Password-Authentication"
+
+    aws_region: str
+    medical_rag_bucket: str
+    kms_encryption_key_id: str
+    kms_signing_key_id: str
+    s3_sse_kms_key_id: str
+    s3_prefix: str = "medical-documents"
+
+    max_upload_bytes: int = 10 * 1024 * 1024
+    uploads_dir: Path = BASE_DIR / "uploads"
 
     token_encryption_key: str
     refresh_token_max_lifetime_days: int = 30
@@ -103,6 +122,18 @@ class Settings(BaseSettings):
         if sslmode in {"allow", "prefer", "require", "verify-ca", "verify-full"}:
             return {"ssl": sslmode}
         return {}
+
+    @property
+    def originals_dir(self) -> Path:
+        return self.uploads_dir / "originals"
+
+    @property
+    def encrypted_dir(self) -> Path:
+        return self.uploads_dir / "encrypted"
+
+    def ensure_upload_dirs(self) -> None:
+        self.originals_dir.mkdir(parents=True, exist_ok=True)
+        self.encrypted_dir.mkdir(parents=True, exist_ok=True)
 
     def require_auth0(self) -> None:
         missing = [
