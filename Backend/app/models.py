@@ -7,8 +7,10 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -71,6 +73,9 @@ class User(Base):
     )
 
     documents: Mapped[list[Document]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    chat_histories: Mapped[list[ChatHistory]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -161,7 +166,9 @@ class DocumentImage(Base):
         nullable=False,
     )
 
-    image_base64: Mapped[str] = mapped_column(Text, nullable=False)
+    ## Raw JPEG bytes (resized to max 1024px, quality 80) — see
+    ## image_repository.process_base64_image.
+    image_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     image_type: Mapped[str | None] = mapped_column(String(64))
     summary: Mapped[str | None] = mapped_column(Text)
     page_number: Mapped[int | None] = mapped_column(Integer)
@@ -175,3 +182,104 @@ class DocumentImage(Base):
 
     def __repr__(self) -> str:
         return f"<DocumentImage document_id={self.document_id} image_id={self.image_id}>"
+
+
+def generate_chat_id(user_id: uuid.UUID | str) -> str:
+    """Chat id: ch-{first 5 chars of the user id}-{UUID4}."""
+    return f"ch-{str(user_id)[:5]}-{uuid.uuid4()}"
+
+
+def generate_message_id(chat_id: str) -> str:
+    """Message id: msg-{first 5 chars of the chat id}-{UUID4}."""
+    return f"msg-{chat_id[:5]}-{uuid.uuid4()}"
+
+
+class ChatHistory(Base):
+    __tablename__ = "chat_histories"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(255), default="New Chat", nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    user: Mapped[User] = relationship(back_populates="chat_histories")
+    messages: Mapped[list[Message]] = relationship(
+        back_populates="chat_history",
+        cascade="all, delete-orphan",
+        order_by="Message.created_at",
+    )
+
+    def __repr__(self) -> str:
+        return f"<ChatHistory id={self.id} user_id={self.user_id}>"
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chat_history_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("chat_histories.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # "User" | "AI"
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+
+    chat_history: Mapped[ChatHistory] = relationship(back_populates="messages")
+    citations: Mapped[list[MessageCitation]] = relationship(
+        back_populates="message", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<Message id={self.id} role={self.role}>"
+
+
+class MessageCitation(Base):
+    __tablename__ = "message_citations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    message_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    ## "E{int}" evidence badge shown next to the answer text.
+    evidence_id: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    doc_id: Mapped[str | None] = mapped_column(String(32))
+    content_type: Mapped[str | None] = mapped_column(String(32))  # text | table | image
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    coordinates: Mapped[dict | list | None] = mapped_column(JSONB)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+
+    message: Mapped[Message] = relationship(back_populates="citations")
+
+    def __repr__(self) -> str:
+        return f"<MessageCitation id={self.id} evidence_id={self.evidence_id}>"

@@ -57,3 +57,57 @@ async def init_db() -> None:
                 "ADD COLUMN IF NOT EXISTS qdrant_point_ids JSONB NOT NULL DEFAULT '[]'::jsonb"
             )
         )
+        await connection.execute(
+            text("ALTER TABLE images ADD COLUMN IF NOT EXISTS image_data BYTEA")
+        )
+
+    await _migrate_images_to_bytea()
+
+
+async def _migrate_images_to_bytea() -> None:
+    """Convert legacy images.image_base64 (TEXT) rows to image_data (BYTEA).
+
+    Existing base64 payloads are decoded, resized to max 1024px and
+    re-encoded as JPEG via the same processor the worker uses; then the old
+    text column is dropped. Idempotent: a no-op once image_base64 is gone.
+    """
+    from sqlalchemy import select, update
+
+    from .models import DocumentImage
+
+    async with engine.begin() as connection:
+        has_old_column = await connection.scalar(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'images' AND column_name = 'image_base64'"
+            )
+        )
+        if not has_old_column:
+            return
+
+        rows = await connection.execute(
+            text(
+                "SELECT document_id, image_id, image_base64 FROM images "
+                "WHERE image_data IS NULL"
+            )
+        )
+        legacy = rows.fetchall()
+        if legacy:
+            from .ingestion.image_repository import process_base64_image
+
+            cache: dict[str, bytes] = {}
+            for document_id, image_id, base64_payload in legacy:
+                data = cache.get(base64_payload)
+                if data is None:
+                    data = process_base64_image(base64_payload)
+                    cache[base64_payload] = data
+                await connection.execute(
+                    update(DocumentImage)
+                    .where(
+                        DocumentImage.document_id == document_id,
+                        DocumentImage.image_id == image_id,
+                    )
+                    .values(image_data=data)
+                )
+
+        await connection.execute(text("ALTER TABLE images DROP COLUMN image_base64"))
