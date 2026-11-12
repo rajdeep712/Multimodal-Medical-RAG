@@ -108,6 +108,7 @@ async def _run_ingestion_inner(document_id: str, user_id: str) -> str | None:
                     client=events.create_task_redis(),
                 )
                 return "SKIPPED"
+            original_filename = doc.original_filename
             doc.ingestion_status = "PROCESSING"
             doc.ingestion_error = None
             await session.commit()
@@ -122,6 +123,8 @@ async def _run_ingestion_inner(document_id: str, user_id: str) -> str | None:
         aws_initialized = aws.kms is not None
 
         tables, texts, images = await extract_content(pdf_path)
+        for item in (*tables, *texts, *images):
+            item["file_name"] = original_filename
         logger.info(
             "Extracted %s tables / %s texts / %s images from %s",
             len(tables), len(texts), len(images), document_id,

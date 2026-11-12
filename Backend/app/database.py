@@ -60,6 +60,18 @@ async def init_db() -> None:
         await connection.execute(
             text("ALTER TABLE images ADD COLUMN IF NOT EXISTS image_data BYTEA")
         )
+        await connection.execute(
+            text(
+                "ALTER TABLE message_citations "
+                "ADD COLUMN IF NOT EXISTS file_name VARCHAR(512)"
+            )
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE message_citations "
+                "ADD COLUMN IF NOT EXISTS content TEXT"
+            )
+        )
 
     await _migrate_images_to_bytea()
 

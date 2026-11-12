@@ -12,7 +12,7 @@ from .database import engine, init_db
 from .events import close_events_redis
 from .exceptions import SessionExpiredError, session_expired_handler
 from .observability import configure_observability
-from .routers import auth, documents, private
+from .routers import auth, chats, documents, private
 from .services import close_auth0_client
 
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +50,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
+app.include_router(chats.router, prefix="/api/chats", tags=["chats"])
 app.include_router(private.router, prefix="/api", tags=["private"])
 
 

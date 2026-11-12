@@ -270,7 +270,11 @@ class MessageCitation(Base):
     evidence_id: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
     doc_id: Mapped[str | None] = mapped_column(String(32))
+    file_name: Mapped[str | None] = mapped_column(String(512))
     content_type: Mapped[str | None] = mapped_column(String(32))  # text | table | image
+    ## Evidence content for text/table citations (chunk text or raw table
+    ## HTML); NULL for image citations.
+    content: Mapped[str | None] = mapped_column(Text)
     page_number: Mapped[int | None] = mapped_column(Integer)
     coordinates: Mapped[dict | list | None] = mapped_column(JSONB)
     score: Mapped[float] = mapped_column(Float, nullable=False)

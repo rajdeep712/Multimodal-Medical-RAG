@@ -65,11 +65,30 @@ class Settings(BaseSettings):
     pii_api_url: str = ""
     pii_api_timeout_seconds: float = 180.0
     biomedclip_images_batch_url: str = "http://127.0.0.1:8001/v1/embeddings/images/batch"
+    biomedclip_text_url: str = "http://127.0.0.1:8001/v1/embeddings/text"
 
     ingestion_batch_size: int = 3
     image_ingestion_batch_size: int = 4
     image_analysis_concurrency: int = 5
     unstructured_warmup_enabled: bool = True
+
+    # Chat answer generation (OpenAI-compatible streaming; provider picked by LLM_PROVIDER).
+    llm_provider: str = "GROQ"  # GROQ | XKIRO | GOOGLE
+    groq_api_key: str = ""
+    chat_llm_base_url: str = "https://api.groq.com/openai/v1"
+    chat_llm_model: str = "qwen/qwen3.8-27b"
+    chat_llm_temperature: float = 0.0
+    chat_llm_max_tokens: int = 2048
+
+    # Google Gemini via its OpenAI-compatible endpoint.
+    google_api_key: str = ""
+    google_chat_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    google_chat_model: str = "gemini-3.5-flash-lite"
+
+    # Hybrid multimodal retrieval (retrieval.ipynb constants).
+    retrieval_top_k: int = 5
+    retrieval_prefetch_limit: int = 30
+    retrieval_max_images: int = 2
 
     logfire_api_key: str = ""
     logfire_environment: str = "development"
@@ -101,6 +120,14 @@ class Settings(BaseSettings):
     @classmethod
     def strip_auth0_values(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("llm_provider")
+    @classmethod
+    def normalize_llm_provider(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value not in {"GROQ", "XKIRO", "GOOGLE"}:
+            raise ValueError("LLM_PROVIDER must be GROQ, XKIRO, or GOOGLE")
+        return value
 
     @field_validator("cookie_samesite")
     @classmethod
