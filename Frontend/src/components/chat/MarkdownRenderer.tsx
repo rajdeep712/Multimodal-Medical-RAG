@@ -1,6 +1,12 @@
 import React from 'react';
 import { Citation } from '../../types/document.ts';
-import { parseMarkdownBlocks, tokenizeInline, MarkdownBlock, InlineToken } from '../../utils/markdownParser.ts';
+import {
+  parseMarkdownBlocks,
+  tokenizeInline,
+  beautifyScientificNotation,
+  MarkdownBlock,
+  InlineToken,
+} from '../../utils/markdownParser.ts';
 import { CitationBadge } from './CitationBadge.tsx';
 import { Info, AlertCircle, FileText, CheckCircle2 } from 'lucide-react';
 
@@ -8,12 +14,16 @@ interface MarkdownRendererProps {
   content: string;
   citations?: Citation[];
   isStreaming?: boolean;
+  /** Unique per message — scopes badge identity so identical evidence ids in
+      different messages (or different occurrences) stay independent. */
+  scopeId?: string;
 }
 
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   content,
   citations,
   isStreaming,
+  scopeId,
 }) => {
   if (!content.trim() && isStreaming) {
     return (
@@ -24,7 +34,11 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     );
   }
 
-  const blocks = parseMarkdownBlocks(content);
+  const blocks = parseMarkdownBlocks(beautifyScientificNotation(content));
+
+  // Occurrence counter per evidence id — blocks render in document order, so
+  // each [[cite:E#]] badge gets a stable identity within this message.
+  const badgeOccurrences = new Map<string, number>();
 
   const renderInline = (text: string) => {
     const tokens = tokenizeInline(text, citations);
@@ -59,6 +73,34 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               citation={token.citation}
             />
           );
+        case 'evidence-citation': {
+          // [[cite:E1]] / [[cite E1, E4]] -> adjacent [1]-style badges,
+          // numbered by the citation's position in the retrieved list.
+          return (
+            <React.Fragment key={idx}>
+              {token.evidenceIds.map((evidenceId, badgeIdx) => {
+                const citation = citations?.find((c) => c.id === evidenceId);
+                const citationNumber = citation
+                  ? (citations?.findIndex((c) => c.id === evidenceId) ?? -1) + 1
+                  : Number(evidenceId.replace(/^E/i, '')) || badgeIdx + 1;
+                const occurrence = badgeOccurrences.get(evidenceId) ?? 0;
+                badgeOccurrences.set(evidenceId, occurrence + 1);
+                return (
+                  <CitationBadge
+                    key={`${idx}-${evidenceId}`}
+                    citationNumber={citationNumber}
+                    citation={citation}
+                    badgeIdentity={{
+                      scope: scopeId ?? '',
+                      evidenceId,
+                      occurrence,
+                    }}
+                  />
+                );
+              })}
+            </React.Fragment>
+          );
+        }
         case 'text':
         default:
           return <span key={idx}>{token.text}</span>;

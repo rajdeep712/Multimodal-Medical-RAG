@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
 import { documentService } from '../../services/documentService.ts';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 export const DocumentToolbar: React.FC = () => {
   const {
@@ -52,14 +53,19 @@ export const DocumentToolbar: React.FC = () => {
     <div className="h-12 bg-white border-b border-[#E2E8F0] px-3 sm:px-4 flex items-center justify-between text-xs text-[#334155] select-none shrink-0">
       {/* Left: Page Navigator */}
       <div className="flex items-center gap-1.5 sm:gap-2">
-        <button
-          onClick={handlePrevPage}
-          disabled={currentPage <= 1}
-          className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent transition-colors cursor-pointer disabled:cursor-not-allowed"
-          title={currentPage <= 1 ? "No previous pages" : "Previous Page"}
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex rounded-lg" />}>
+            <button
+              onClick={handlePrevPage}
+              disabled={currentPage <= 1}
+              className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:pointer-events-none transition-colors cursor-pointer disabled:cursor-not-allowed"
+              aria-label="Previous Page"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{currentPage <= 1 ? 'No previous pages' : 'Previous Page'}</TooltipContent>
+        </Tooltip>
 
         <div className="flex items-center gap-1 font-medium">
           <span>Page</span>
@@ -79,46 +85,60 @@ export const DocumentToolbar: React.FC = () => {
           <span className="text-[#64748B]">of {totalPages}</span>
         </div>
 
-        <button
-          onClick={handleNextPage}
-          disabled={currentPage >= totalPages}
-          className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent transition-colors cursor-pointer disabled:cursor-not-allowed"
-          title={currentPage >= totalPages ? "No more pages" : "Next Page"}
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex rounded-lg" />}>
+            <button
+              onClick={handleNextPage}
+              disabled={currentPage >= totalPages}
+              className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:pointer-events-none transition-colors cursor-pointer disabled:cursor-not-allowed"
+              aria-label="Next Page"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{currentPage >= totalPages ? 'No more pages' : 'Next Page'}</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* Center: Zoom Controls */}
       <div className="hidden md:flex items-center gap-1 bg-[#F8FAFC] p-1 rounded-xl border border-[#E2E8F0]">
-        <button
-          onClick={() => setZoomLevel(Math.max(50, zoomLevel - 15))}
-          disabled={zoomLevel <= 50}
-          className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-          title="Zoom Out"
-        >
-          <ZoomOut className="w-3.5 h-3.5" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex rounded-lg" />}>
+            <button
+              onClick={() => setZoomLevel(Math.max(50, zoomLevel - 15))}
+              disabled={zoomLevel <= 50}
+              className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none"
+              aria-label="Zoom Out"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{zoomLevel <= 50 ? 'Minimum zoom reached' : 'Zoom Out'}</TooltipContent>
+        </Tooltip>
 
         <span className="px-2 font-mono text-[11px] font-semibold text-[#123047]">
           {zoomLevel}%
         </span>
 
-        <button
-          onClick={() => setZoomLevel(Math.min(200, zoomLevel + 15))}
-          disabled={zoomLevel >= 200}
-          className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-          title="Zoom In"
-        >
-          <ZoomIn className="w-3.5 h-3.5" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex rounded-lg" />}>
+            <button
+              onClick={() => setZoomLevel(Math.min(200, zoomLevel + 15))}
+              disabled={zoomLevel >= 200}
+              className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none"
+              aria-label="Zoom In"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{zoomLevel >= 200 ? 'Maximum zoom reached' : 'Zoom In'}</TooltipContent>
+        </Tooltip>
 
         <div className="h-3 w-px bg-slate-300 mx-1" />
 
         <button
           onClick={fitWidth}
           className="px-2 py-0.5 rounded-lg hover:bg-white text-[11px] font-medium text-slate-600 hover:text-[#087F8C] transition-all cursor-pointer"
-          title="Fit to Width"
         >
           Fit Width
         </button>
@@ -126,7 +146,6 @@ export const DocumentToolbar: React.FC = () => {
         <button
           onClick={fitPage}
           className="px-2 py-0.5 rounded-lg hover:bg-white text-[11px] font-medium text-slate-600 hover:text-[#087F8C] transition-all cursor-pointer"
-          title="Fit to Page"
         >
           Fit Page
         </button>
@@ -134,38 +153,47 @@ export const DocumentToolbar: React.FC = () => {
 
       {/* Right: Actions (Rotate, Download, Fullscreen) */}
       <div className="flex items-center gap-1 sm:gap-1.5">
-        <button
-          onClick={handleRotate}
-          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
-          title={`Rotate Page (Currently ${rotation}°)`}
-        >
-          <RotateCw className="w-3.5 h-3.5" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            onClick={handleRotate}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
+            aria-label="Rotate Page"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{`Rotate Page (Currently ${rotation}°)`}</TooltipContent>
+        </Tooltip>
 
-        <button
-          onClick={handleDownload}
-          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#087F8C] transition-colors cursor-pointer"
-          title="Download Medical Record"
-        >
-          <Download className="w-3.5 h-3.5" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            onClick={handleDownload}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#087F8C] transition-colors cursor-pointer"
+            aria-label="Download Medical Record"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Download Medical Record</TooltipContent>
+        </Tooltip>
 
-        <button
-          onClick={() => {
-            const el = document.getElementById('document-viewport-container');
-            if (el) {
-              if (document.fullscreenElement) {
-                document.exitFullscreen();
-              } else {
-                el.requestFullscreen();
+        <Tooltip>
+          <TooltipTrigger
+            onClick={() => {
+              const el = document.getElementById('document-viewport-container');
+              if (el) {
+                if (document.fullscreenElement) {
+                  document.exitFullscreen();
+                } else {
+                  el.requestFullscreen();
+                }
               }
-            }
-          }}
-          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
-          title="Toggle Fullscreen Mode"
-        >
-          <Maximize2 className="w-3.5 h-3.5" />
-        </button>
+            }}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
+            aria-label="Toggle Fullscreen Mode"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Toggle Fullscreen Mode</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );

@@ -15,17 +15,33 @@ import {
 
 interface SourcesPanelProps {
   citations: Citation[];
+  /** Message id — scopes badge highlighting to this message only. */
+  messageId?: string;
 }
 
-export const SourcesPanel: React.FC<SourcesPanelProps> = ({ citations }) => {
+export const SourcesPanel: React.FC<SourcesPanelProps> = ({ citations, messageId }) => {
   const [isExpanded, setIsExpanded] = useState(true);
-  const { setActiveCitation, activeCitation } = useCitationStore();
-  const { selectDocumentAndPage } = useDocumentStore();
+  const { setActiveCitation, activeCitation, activeBadge, setActiveBadge, clearHighlight } =
+    useCitationStore();
+  const { openDocumentAtPage } = useDocumentStore();
 
   if (!citations || citations.length === 0) return null;
 
+  const scope = messageId ?? '';
+
+  // Card click: highlight the matching citation badge(s) inside this message
+  // only — the document viewer is intentionally left untouched.
   const handleSourceClick = (cit: Citation) => {
-    selectDocumentAndPage(cit.documentId, cit.pageNumber);
+    setActiveBadge({ scope, evidenceId: cit.id, occurrence: null });
+    clearHighlight();
+  };
+
+  // "View in document": open the document at the cited page and draw the
+  // bounding-box highlight in the viewer. Exclusive with badge highlighting.
+  const handleViewInDocument = (e: React.MouseEvent, cit: Citation) => {
+    e.stopPropagation();
+    setActiveBadge(null);
+    void openDocumentAtPage(cit.documentId, cit.pageNumber ?? 1);
     setActiveCitation(cit);
   };
 
@@ -59,7 +75,13 @@ export const SourcesPanel: React.FC<SourcesPanelProps> = ({ citations }) => {
       {isExpanded && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
           {citations.map((cit, idx) => {
-            const isActive = activeCitation?.id === cit.id;
+            // The card is active when its badge(s) were highlighted via a card
+            // click, or when this citation is the one shown in the viewer.
+            const isBadgeHighlighted =
+              !!activeBadge &&
+              activeBadge.scope === scope &&
+              activeBadge.evidenceId === cit.id;
+            const isActive = isBadgeHighlighted || activeCitation?.id === cit.id;
             return (
               <div
                 key={cit.id || idx}
@@ -100,8 +122,11 @@ export const SourcesPanel: React.FC<SourcesPanelProps> = ({ citations }) => {
                     )}
                     {cit.contentType}
                   </span>
-                  <span className="flex items-center gap-0.5 hover:underline">
-                    View in PDF
+                  <span
+                    onClick={(e) => handleViewInDocument(e, cit)}
+                    className="flex items-center gap-0.5 hover:underline"
+                  >
+                    View in document
                     <ExternalLink className="w-2.5 h-2.5" />
                   </span>
                 </div>

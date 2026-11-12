@@ -11,9 +11,9 @@ export interface SourceCoordinates {
 export interface Citation {
   id: string;
   documentId: string;
-  elementId: string;
+  elementId?: string;
   documentName: string;
-  pageNumber: number;
+  pageNumber: number | null;
   contentType: ContentType;
   coordinates: SourceCoordinates[];
   excerpt?: string;

@@ -13,6 +13,7 @@ import {
   PanelRightOpen,
   GripVertical,
 } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 export const WorkspaceLayout: React.FC = () => {
   // Split pane sizing (chat width percentage: 44% initial)
@@ -144,15 +145,18 @@ export const WorkspaceLayout: React.FC = () => {
 
         {/* Draggable Divider (Desktop Only) */}
         {!isDocumentCollapsed && (
-          <div
-            onMouseDown={handleMouseDown}
-            className={`hidden lg:flex w-2 bg-[#E2E8F0] hover:bg-[#087F8C]/40 cursor-col-resize items-center justify-center transition-colors shrink-0 z-30 group ${
-              isDragging ? 'bg-[#087F8C]' : ''
-            }`}
-            title="Drag to resize chat and document viewer"
-          >
-            <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-white" />
-          </div>
+          <Tooltip>
+            <TooltipTrigger
+              onMouseDown={handleMouseDown}
+              className={`hidden lg:flex w-2 bg-[#E2E8F0] hover:bg-[#087F8C]/40 cursor-col-resize items-center justify-center transition-colors shrink-0 z-30 group ${
+                isDragging ? 'bg-[#087F8C]' : ''
+              }`}
+              aria-label="Drag to resize chat and document viewer"
+            >
+              <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-white" />
+            </TooltipTrigger>
+            <TooltipContent side="top">Drag to resize chat and document viewer</TooltipContent>
+          </Tooltip>
         )}
 
         {/* Right Side: Interactive Document Viewer */}
@@ -179,13 +183,16 @@ export const WorkspaceLayout: React.FC = () => {
             <div className="flex items-center gap-2 sm:gap-3">
               <ProfileDropdown />
 
-              <button
-                onClick={() => setIsDocumentCollapsed(true)}
-                className="hidden lg:flex p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-[#123047] transition-colors cursor-pointer"
-                title="Collapse Document Panel"
-              >
-                <PanelRightClose className="w-4 h-4" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  onClick={() => setIsDocumentCollapsed(true)}
+                  className="hidden lg:flex p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-[#123047] transition-colors cursor-pointer"
+                  aria-label="Collapse Document Panel"
+                >
+                  <PanelRightClose className="w-4 h-4" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Collapse Document Panel</TooltipContent>
+              </Tooltip>
             </div>
           </div>
 

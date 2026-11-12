@@ -23,10 +23,13 @@ export const API_CONFIG = {
       userEvents: '/documents/events',
     },
     chat: {
-      query: '/chat/query',
-      stream: '/chat/stream',
-      conversations: '/chat/conversations',
-      citations: (id: string) => `/citations/${id}`,
+      list: '/chats',
+      create: '/chats',
+      detail: (id: string) => `/chats/${id}`,
+      update: (id: string) => `/chats/${id}`,
+      delete: (id: string) => `/chats/${id}`,
+      stream: (id: string, token: string) =>
+        `/chats/${id}/stream?token=${encodeURIComponent(token)}`,
     },
   },
 };

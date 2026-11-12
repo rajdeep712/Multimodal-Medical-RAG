@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useChatStore } from '../../stores/useChatStore.ts';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 interface ChatComposerProps {
   isDocumentCollapsed?: boolean;
@@ -308,28 +309,36 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ isDocumentCollapsed 
       {/* Main Text Input Box */}
       <div className="relative flex items-end gap-2 bg-[#F8FAFC] border border-[#CBD5E1] focus-within:border-[#087F8C] focus-within:ring-2 focus-within:ring-[#087F8C]/15 rounded-2xl p-2 transition-all">
         {/* Upload/Attachment Button */}
-        <button
-          type="button"
-          onClick={() => setUploadModalOpen(true)}
-          className="p-2 text-slate-400 hover:text-[#087F8C] hover:bg-white rounded-xl transition-all shrink-0 cursor-pointer"
-          title="Upload or attach medical documents"
-        >
-          <Paperclip className="w-4 h-4" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            type="button"
+            onClick={() => setUploadModalOpen(true)}
+            className="p-2 text-slate-400 hover:text-[#087F8C] hover:bg-white rounded-xl transition-all shrink-0 cursor-pointer"
+            aria-label="Upload or attach medical documents"
+          >
+            <Paperclip className="w-4 h-4" />
+          </TooltipTrigger>
+          <TooltipContent side="top">Upload or attach medical documents</TooltipContent>
+        </Tooltip>
 
         {/* Voice Dictation Microphone Button */}
-        <button
-          type="button"
-          onClick={handleToggleSpeech}
-          className={`p-2 rounded-xl transition-all shrink-0 cursor-pointer ${
-            isListening
-              ? 'bg-red-600 text-white animate-pulse shadow-md'
-              : 'text-slate-400 hover:text-[#087F8C] hover:bg-white'
-          }`}
-          title={isListening ? 'Listening... Click to stop dictation' : 'Dictate clinical query with voice'}
-        >
-          {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            type="button"
+            onClick={handleToggleSpeech}
+            className={`p-2 rounded-xl transition-all shrink-0 cursor-pointer ${
+              isListening
+                ? 'bg-red-600 text-white animate-pulse shadow-md'
+                : 'text-slate-400 hover:text-[#087F8C] hover:bg-white'
+            }`}
+            aria-label="Dictate clinical query with voice"
+          >
+            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {isListening ? 'Listening... Click to stop dictation' : 'Dictate clinical query with voice'}
+          </TooltipContent>
+        </Tooltip>
 
         {/* Textarea */}
         <textarea
@@ -343,16 +352,24 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ isDocumentCollapsed 
           className="w-full max-h-32 bg-transparent text-sm text-[#123047] placeholder-slate-400 resize-none focus:outline-none py-1.5 leading-relaxed"
         />
 
-        {/* Send Button */}
-        <button
-          type="button"
-          onClick={handleSend}
-          disabled={!input.trim() || isStreaming}
-          className="p-2 rounded-xl bg-[#087F8C] text-white hover:bg-[#066570] disabled:opacity-40 disabled:hover:bg-[#087F8C] transition-all shrink-0 shadow-xs active:scale-95 cursor-pointer disabled:cursor-not-allowed"
-          title={!input.trim() ? "Type a medical question to send" : "Send medical query (Enter)"}
-        >
-          <Send className="w-4 h-4" />
-        </button>
+        {/* Send Button — span wrapper keeps the tooltip working while the
+            button is disabled (pointer-events pass through to the trigger). */}
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex shrink-0 rounded-xl" />}>
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={!input.trim() || isStreaming}
+              className="p-2 rounded-xl bg-[#087F8C] text-white hover:bg-[#066570] disabled:opacity-40 disabled:hover:bg-[#087F8C] disabled:pointer-events-none transition-all shrink-0 shadow-xs active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+              aria-label={!input.trim() ? "Type a medical question to send" : "Send medical query"}
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {!input.trim() ? 'Type a medical question to send' : 'Send medical query (Enter)'}
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       <div className="mt-1.5 flex items-center justify-between text-[10px] text-[#94A3B8] px-1">

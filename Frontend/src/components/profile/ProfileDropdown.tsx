@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { User, Settings, FolderArchive, LogOut, ChevronDown, Check, Sun, Moon } from 'lucide-react';
 import { useAuth } from '../../stores/useAuthStore.ts';
 import { useThemeStore } from '../../stores/useThemeStore.ts';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 export const ProfileDropdown: React.FC = () => {
   const { user, logout } = useAuth();
@@ -25,22 +26,25 @@ export const ProfileDropdown: React.FC = () => {
 
   return (
     <div className="relative" ref={menuRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2.5 p-1 sm:px-2.5 sm:py-1 rounded-xl hover:bg-slate-100 border border-transparent hover:border-[#CBD5E1] transition-all cursor-pointer"
-        title="Account & Workspace Settings"
-      >
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#123047] to-[#087F8C] text-white flex items-center justify-center text-xs font-bold shadow-xs">
-          {user.initials || 'MD'}
-        </div>
-        <div className="hidden xl:flex flex-col text-left">
-          <span className="text-xs font-bold text-[#123047] leading-none">{user.name}</span>
-          <span className="text-[10px] text-[#64748B] leading-tight truncate max-w-[140px]">
-            {user.email}
-          </span>
-        </div>
-        <ChevronDown className="w-3.5 h-3.5 text-[#64748B] hidden sm:block" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          onClick={() => setIsOpen(!isOpen)}
+          className="flex items-center gap-2.5 p-1 sm:px-2.5 sm:py-1 rounded-xl hover:bg-slate-100 border border-transparent hover:border-[#CBD5E1] transition-all cursor-pointer"
+          aria-label="Account & Workspace Settings"
+        >
+          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#123047] to-[#087F8C] text-white flex items-center justify-center text-xs font-bold shadow-xs">
+            {user.initials || 'MD'}
+          </div>
+          <div className="hidden xl:flex flex-col text-left">
+            <span className="text-xs font-bold text-[#123047] leading-none">{user.name}</span>
+            <span className="text-[10px] text-[#64748B] leading-tight truncate max-w-[140px]">
+              {user.email}
+            </span>
+          </div>
+          <ChevronDown className="w-3.5 h-3.5 text-[#64748B] hidden sm:block" />
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Account & Workspace Settings</TooltipContent>
+      </Tooltip>
 
       {isOpen && (
         <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-[#CBD5E1] py-2 z-50 animate-in fade-in zoom-in-95 duration-150">

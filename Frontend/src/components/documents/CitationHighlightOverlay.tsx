@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { useCitationStore } from '../../stores/useCitationStore.ts';
 import { calculateRenderedBox, RenderedBox } from '../../utils/coordinates.ts';
 import { Sparkles, X, BookmarkCheck } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 interface CitationHighlightOverlayProps {
   pageNumber: number;
@@ -67,16 +68,19 @@ export const CitationHighlightOverlay: React.FC<CitationHighlightOverlayProps> =
               <span className="truncate max-w-[200px]">
                 {box.label || activeCitation.excerpt?.slice(0, 32) || 'Evidence Source'}
               </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  clearHighlight();
-                }}
-                className="ml-1 p-0.5 rounded hover:bg-white/20 transition-colors cursor-pointer"
-                title="Dismiss highlight"
-              >
-                <X className="w-2.5 h-2.5 text-white" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    clearHighlight();
+                  }}
+                  className="ml-1 p-0.5 rounded hover:bg-white/20 transition-colors cursor-pointer"
+                  aria-label="Dismiss highlight"
+                >
+                  <X className="w-2.5 h-2.5 text-white" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Dismiss highlight</TooltipContent>
+              </Tooltip>
             </div>
           </div>
         );

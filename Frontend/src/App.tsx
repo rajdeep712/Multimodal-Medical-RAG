@@ -5,7 +5,9 @@ import { HomePage } from './pages/HomePage.tsx';
 import { AuthPage } from './pages/AuthPage.tsx';
 import { WorkspacePage } from './pages/WorkspacePage.tsx';
 import { useAuth } from './stores/useAuthStore.ts';
+import { ChatProvider } from './stores/useChatStore.ts';
 import { useThemeStore } from './stores/useThemeStore.ts';
+import { TooltipProvider } from './components/ui/tooltip.tsx';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth();
@@ -42,20 +44,35 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/auth/login" element={<AuthPage />} />
-        <Route path="/auth/signup" element={<AuthPage />} />
-        <Route
-          path="/workspace"
-          element={
-            <ProtectedRoute>
-              <WorkspacePage />
-            </ProtectedRoute>
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      {/* Shared tooltip context for every icon-only control in the app. */}
+      <TooltipProvider delay={300}>
+      {/* Chat state lives above <Routes> so an in-flight answer stream
+          survives the /workspace -> /c/:chatId replace-navigation. */}
+      <ChatProvider>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/auth/login" element={<AuthPage />} />
+          <Route path="/auth/signup" element={<AuthPage />} />
+          <Route
+            path="/workspace"
+            element={
+              <ProtectedRoute>
+                <WorkspacePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/c/:chatId"
+            element={
+              <ProtectedRoute>
+                <WorkspacePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </ChatProvider>
+      </TooltipProvider>
     </BrowserRouter>
   );
 }

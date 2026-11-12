@@ -5,7 +5,9 @@ export type InlineToken =
   | { type: 'bold'; text: string }
   | { type: 'italic'; text: string }
   | { type: 'code'; text: string }
-  | { type: 'citation'; citationIndex: number; citation?: Citation };
+  | { type: 'citation'; citationIndex: number; citation?: Citation }
+  | { type: 'evidence-citation'; evidenceIds: string[] };
+
 
 export interface MarkdownBlock {
   type: 'heading' | 'blockquote' | 'bullet-list' | 'ordered-list' | 'table' | 'paragraph';
@@ -15,14 +17,54 @@ export interface MarkdownBlock {
   tableData?: { headers: string[]; rows: string[][] };
 }
 
+const SUPERSCRIPT_DIGITS: Record<string, string> = {
+  '0': '⁰',
+  '1': '¹',
+  '2': '²',
+  '3': '³',
+  '4': '⁴',
+  '5': '⁵',
+  '6': '⁶',
+  '7': '⁷',
+  '8': '⁸',
+  '9': '⁹',
+  '-': '⁻',
+};
+
+function toSuperscript(digits: string): string {
+  return digits
+    .split('')
+    .map((d) => SUPERSCRIPT_DIGITS[d] ?? d)
+    .join('');
+}
+
 /**
- * Tokenizes inline text containing bold, italic, code, and citations [1], [2].
+ * Beautifies scientific notation in LLM output:
+ * "240 x10^9/L" -> "240 × 10⁹/L", "10^3" -> "10³".
+ */
+export function beautifyScientificNotation(text: string): string {
+  return text
+    .replace(
+      /(\d+(?:\.\d+)?)\s*[x×]\s*10\^(-?\d+)/g,
+      (_match, coefficient: string, exponent: string) =>
+        `${coefficient} × 10${toSuperscript(exponent)}`
+    )
+    .replace(/\b10\^(-?\d+)/g, (_match, exponent: string) => `10${toSuperscript(exponent)}`);
+}
+
+/** Matches [[cite:E1]], [[cite E1]], [[cite:E1, E4]], [[cite E1, E4]] */
+const CITE_MARKER_PATTERN = /\[\[cite:?\s*([^\]]+)\]\]/i;
+
+/**
+ * Tokenizes inline text containing bold, italic, code, evidence citations
+ * ([[cite:E1]] / [[cite E1, E4]]) and legacy numeric citations [1], [2].
  */
 export function tokenizeInline(text: string, citations?: Citation[]): InlineToken[] {
   if (!text) return [];
 
-  // Match bold **text**, code `code`, citation [1], italic *text*
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[\d+\]|\*[^*]+\*)/g;
+  // Match bold **text**, code `code`, evidence [[cite:...]], citation [1], italic *text*
+  const pattern =
+    /(\*\*[^*]+\*\*|`[^`]+`|\[\[cite:?[^\]]*\]\]|\[\d+\]|\*[^*]+\*)/gi;
   const tokens: InlineToken[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -39,7 +81,18 @@ export function tokenizeInline(text: string, citations?: Citation[]): InlineToke
       });
     }
 
-    if (matchedStr.startsWith('**') && matchedStr.endsWith('**')) {
+    if (matchedStr.toLowerCase().startsWith('[[cite')) {
+      // Evidence ids: [[cite:E1]] / [[cite E1, E4]] -> E1, E4
+      const evidenceIds = CITE_MARKER_PATTERN.exec(matchedStr)?.[1]
+        .split(',')
+        .map((id) => id.trim().toUpperCase())
+        .filter((id) => /^E\d+$/.test(id));
+      if (evidenceIds && evidenceIds.length > 0) {
+        tokens.push({ type: 'evidence-citation', evidenceIds });
+      } else {
+        tokens.push({ type: 'text', text: matchedStr });
+      }
+    } else if (matchedStr.startsWith('**') && matchedStr.endsWith('**')) {
       tokens.push({
         type: 'bold',
         text: matchedStr.slice(2, -2),

@@ -33,6 +33,7 @@ interface DocumentState {
   setUploadModalOpen: (open: boolean) => void;
   setFilterSearchQuery: (query: string) => void;
   selectDocumentAndPage: (docId: string, pageNumber: number) => void;
+  openDocumentAtPage: (docId: string, pageNumber: number) => Promise<void>;
   refreshDocuments: () => Promise<void>;
   deleteDocument: (id: string) => Promise<boolean>;
   updateDocumentStatus: (
@@ -249,6 +250,32 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
     [documents]
   );
 
+  // Citation navigation: open a document by id (fetching it into the library
+  // if it is not loaded yet) and jump straight to the cited page.
+  const openDocumentAtPage = useCallback(
+    async (docId: string, pageNumber: number) => {
+      let doc = documentsRef.current.find((d) => d.id === docId);
+      if (!doc) {
+        try {
+          doc = (await documentService.getDocumentById(docId)) ?? undefined;
+          if (doc) {
+            setDocuments((prev) =>
+              prev.some((d) => d.id === doc!.id) ? prev : [doc!, ...prev]
+            );
+          }
+        } catch (err) {
+          console.error('Could not load the cited document:', err);
+          return;
+        }
+      }
+      if (!doc) return;
+      setPendingDocumentState(null);
+      setSelectedDocument(doc);
+      setCurrentPageState(Math.max(1, pageNumber));
+    },
+    []
+  );
+
   const setCurrentPage = useCallback((page: number) => {
     setCurrentPageState(page);
   }, []);
@@ -297,6 +324,7 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
         setUploadModalOpen,
         setFilterSearchQuery,
         selectDocumentAndPage,
+        openDocumentAtPage,
         refreshDocuments,
         deleteDocument,
         updateDocumentStatus,

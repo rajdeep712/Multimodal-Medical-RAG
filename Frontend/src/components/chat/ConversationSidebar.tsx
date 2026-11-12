@@ -19,6 +19,7 @@ import {
 import { motion } from 'motion/react';
 import { useChatStore } from '../../stores/useChatStore.ts';
 import { ChatConversation } from '../../types/chat.ts';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 interface ConversationSidebarProps {
   isOpen: boolean;
@@ -138,13 +139,16 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
               <span>New</span>
             </button>
 
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-              title="Close sidebar"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                onClick={onClose}
+                className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                aria-label="Close sidebar"
+              >
+                <X className="w-4 h-4" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Close sidebar</TooltipContent>
+            </Tooltip>
           </div>
         </div>
 
@@ -212,13 +216,16 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
                           autoFocus
                           className="w-full py-0.5 px-1.5 text-xs bg-white border border-[#087F8C] rounded font-medium text-[#123047] focus:outline-none"
                         />
-                        <button
-                          onClick={() => handleSaveRename(conv.id)}
-                          className="p-1 rounded bg-[#087F8C] text-white hover:bg-[#066570] cursor-pointer"
-                          title="Save title"
-                        >
-                          <Check className="w-3 h-3" />
-                        </button>
+                        <Tooltip>
+                          <TooltipTrigger
+                            onClick={() => handleSaveRename(conv.id)}
+                            className="p-1 rounded bg-[#087F8C] text-white hover:bg-[#066570] cursor-pointer"
+                            aria-label="Save title"
+                          >
+                            <Check className="w-3 h-3" />
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Save title</TooltipContent>
+                        </Tooltip>
                       </div>
                     ) : (
                       <div className="min-w-0 flex-1">
@@ -237,19 +244,22 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
                       className="relative shrink-0"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <button
-                        onClick={() =>
-                          setActiveMenuId(activeMenuId === conv.id ? null : conv.id)
-                        }
-                        className={`p-1 rounded-lg text-slate-400 hover:text-[#123047] hover:bg-slate-200/60 transition-all cursor-pointer ${
-                          activeMenuId === conv.id
-                            ? 'opacity-100 bg-slate-200 text-[#123047]'
-                            : 'opacity-0 group-hover:opacity-100'
-                        }`}
-                        title="Conversation actions"
-                      >
-                        <MoreVertical className="w-3.5 h-3.5" />
-                      </button>
+                      <Tooltip>
+                        <TooltipTrigger
+                          onClick={() =>
+                            setActiveMenuId(activeMenuId === conv.id ? null : conv.id)
+                          }
+                          className={`p-1 rounded-lg text-slate-400 hover:text-[#123047] hover:bg-slate-200/60 transition-all cursor-pointer ${
+                            activeMenuId === conv.id
+                              ? 'opacity-100 bg-slate-200 text-[#123047]'
+                              : 'opacity-0 group-hover:opacity-100'
+                          }`}
+                          aria-label="Conversation actions"
+                        >
+                          <MoreVertical className="w-3.5 h-3.5" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top">Conversation actions</TooltipContent>
+                      </Tooltip>
 
                       {/* Dropdown Action Popover */}
                       {activeMenuId === conv.id && (

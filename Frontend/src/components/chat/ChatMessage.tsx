@@ -1,31 +1,31 @@
 import React, { useState } from 'react';
+import { ThinkingOrb } from 'thinking-orbs';
 import { ChatMessage as ChatMessageType } from '../../types/chat.ts';
 import { MarkdownRenderer } from './MarkdownRenderer.tsx';
 import { SourcesPanel } from './SourcesPanel.tsx';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 import {
   Copy,
   Check,
-  RotateCcw,
-  Sparkles,
-  Bot,
-  User as UserIcon,
-  Search,
 } from 'lucide-react';
 
 interface ChatMessageProps {
   message: ChatMessageType;
-  onRetry?: () => void;
   onSelectPrompt?: (prompt: string) => void;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
   message,
-  onRetry,
   onSelectPrompt,
 }) => {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
   const isStreaming = message.status === 'streaming';
+
+  // Thinking phase: the query was sent and the answer stream has not produced
+  // anything yet (no content, no citations attached).
+  const isThinkingPhase =
+    isStreaming && !message.content && (!message.citations || message.citations.length === 0);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(message.content);
@@ -33,11 +33,40 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const sentTime = (() => {
+    const date = new Date(message.createdAt);
+    return Number.isNaN(date.getTime())
+      ? ''
+      : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  })();
+
   if (isUser) {
     return (
-      <div className="flex justify-end mb-4 animate-in fade-in slide-in-from-bottom-2 duration-150">
+      <div className="flex flex-col items-end mb-4 animate-in fade-in slide-in-from-bottom-2 duration-150">
         <div className="max-w-[85%] sm:max-w-[75%] bg-[#DDF4F5] text-[#123047] px-4 py-3 rounded-2xl rounded-tr-xs shadow-xs text-sm font-medium leading-relaxed border border-[#BDEFE7]">
           {message.content}
+        </div>
+        {sentTime && (
+          <span className="text-[10px] text-[#94A3B8] mt-1 mr-1">{sentTime}</span>
+        )}
+      </div>
+    );
+  }
+
+  // Thinking phase: query sent, answer stream has not produced anything yet
+  // (no content, no citations) — solving orb + shimmer text, no background.
+  if (isThinkingPhase) {
+    return (
+      <div className="mb-6 animate-in fade-in duration-200">
+        <div className="inline-flex items-center gap-3 px-1 py-2">
+          <ThinkingOrb
+            state="solving"
+            size={20}
+            aria-hidden="true"
+          />
+          <span className="thinking-shimmer text-sm font-semibold tracking-wide" role="status">
+            Thinking...
+          </span>
         </div>
       </div>
     );
@@ -45,44 +74,22 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
 
   return (
-    <div className="flex items-start gap-3 mb-6 animate-in fade-in duration-200">
-      {/* Assistant AI Avatar */}
-      <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#123047] to-[#087F8C] text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
-        <Sparkles className="w-4 h-4 text-[#BDEFE7]" />
-      </div>
-
-      <div className="flex-1 min-w-0 bg-white rounded-2xl p-4 sm:p-5 border border-[#E2E8F0] shadow-xs">
-        {/* Header telemetry / model name */}
-        <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#F1F5F9] text-xs text-[#64748B]">
-          <span className="font-bold text-[#123047] flex items-center gap-1.5">
-            MediLens Clinical Synthesis
-            {isStreaming && (
-              <span className="w-2 h-2 rounded-full bg-[#087F8C] animate-pulse" />
-            )}
-          </span>
-
-          <div className="flex items-center gap-2">
-            {message.retrievalMetadata && (
-              <span className="hidden sm:inline-flex text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">
-                {message.retrievalMetadata.latencyMs}ms latency
-              </span>
-            )}
-            <button
-              onClick={handleCopy}
-              className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-              title="Copy message"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-[#16A34A]" /> : <Copy className="w-3.5 h-3.5" />}
-            </button>
-            {onRetry && (
-              <button
-                onClick={onRetry}
-                className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-                title="Retry response"
+    <div className="group mb-6 animate-in fade-in duration-200">
+      <div className="min-w-0 bg-white rounded-2xl p-4 sm:p-5 border border-[#E2E8F0] shadow-xs">
+        {/* Sticky copy button — top right of the box, visible on hover even
+            when the box is scrolled midway */}
+        <div className="sticky top-2 z-10 flex justify-end h-0 pr-1">
+          <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+            <Tooltip>
+              <TooltipTrigger
+                onClick={handleCopy}
+                className="p-1.5 rounded-lg bg-white border border-[#E2E8F0] shadow-sm hover:bg-slate-50 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                aria-label="Copy response"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            )}
+                {copied ? <Check className="w-3.5 h-3.5 text-[#16A34A]" /> : <Copy className="w-3.5 h-3.5" />}
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{copied ? 'Copied' : 'Copy response'}</TooltipContent>
+            </Tooltip>
           </div>
         </div>
 
@@ -92,6 +99,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
             content={message.content}
             citations={message.citations}
             isStreaming={isStreaming}
+            scopeId={message.id}
           />
         </div>
 
@@ -117,9 +125,12 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
         {/* Bottom Expandable Sources Panel */}
         {message.citations && message.citations.length > 0 && (
-          <SourcesPanel citations={message.citations} />
+          <SourcesPanel citations={message.citations} messageId={message.id} />
         )}
       </div>
+      {sentTime && (
+        <span className="text-[10px] text-[#94A3B8] mt-1 ml-1 block">{sentTime}</span>
+      )}
     </div>
   );
 };

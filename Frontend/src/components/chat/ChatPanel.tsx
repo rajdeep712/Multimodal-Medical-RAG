@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useChatStore } from '../../stores/useChatStore.ts';
 import { useThemeStore } from '../../stores/useThemeStore.ts';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 import { ChatMessage } from './ChatMessage.tsx';
 import { ChatComposer } from './ChatComposer.tsx';
 import { ConversationSidebar } from './ConversationSidebar.tsx';
@@ -62,6 +63,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     startNewChat,
     sendMessage,
     isStreaming,
+    isLoadingChat,
   } = useChatStore();
   const { theme, toggleTheme } = useThemeStore();
 
@@ -182,13 +184,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {/* --- Top Chat Header --- */}
       <div className="h-14 bg-white border-b border-[#E2E8F0] px-4 flex items-center justify-between shrink-0 z-10">
         <div className="flex items-center gap-2.5 min-w-0">
-          <Link
-            to="/"
-            className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#123047] to-[#087F8C] text-white flex items-center justify-center shrink-0 shadow-2xs hover:opacity-90 transition-opacity cursor-pointer"
-            title="MediLens AI Home"
-          >
-            <FileSearch className="w-4 h-4" />
-          </Link>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Link
+                  to="/"
+                  className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#123047] to-[#087F8C] text-white flex items-center justify-center shrink-0 shadow-2xs hover:opacity-90 transition-opacity cursor-pointer"
+                />
+              }
+            >
+              <FileSearch className="w-4 h-4" />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">MediLens AI Home</TooltipContent>
+          </Tooltip>
           <div className="flex flex-col min-w-0">
             <span className="text-xs font-bold text-[#123047] truncate leading-tight">
               {conversation?.title || 'Clinical Consultation'}
@@ -201,25 +209,33 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <button
-            onClick={toggleTheme}
-            className="p-1.5 rounded-lg border bg-white border-[#E2E8F0] text-slate-500 hover:text-[#123047] hover:bg-slate-50 transition-all cursor-pointer"
-            title={theme === 'dark' ? 'Switch to Clinical Light Mode' : 'Switch to Dark Mode'}
-          >
-            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-[#087F8C]" />}
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              onClick={toggleTheme}
+              className="p-1.5 rounded-lg border bg-white border-[#E2E8F0] text-slate-500 hover:text-[#123047] hover:bg-slate-50 transition-all cursor-pointer"
+              aria-label="Toggle color mode"
+            >
+              {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-[#087F8C]" />}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {theme === 'dark' ? 'Switch to Clinical Light Mode' : 'Switch to Dark Mode'}
+            </TooltipContent>
+          </Tooltip>
 
-          <button
-            onClick={() => setShowHistory(true)}
-            className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-              showHistory
-                ? 'bg-[#DDF4F5] border-[#087F8C] text-[#087F8C]'
-                : 'bg-white border-[#E2E8F0] text-slate-500 hover:text-[#123047] hover:bg-slate-50'
-            }`}
-            title="Open Consultation History"
-          >
-            <History className="w-4 h-4" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              onClick={() => setShowHistory(true)}
+              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                showHistory
+                  ? 'bg-[#DDF4F5] border-[#087F8C] text-[#087F8C]'
+                  : 'bg-white border-[#E2E8F0] text-slate-500 hover:text-[#123047] hover:bg-slate-50'
+              }`}
+              aria-label="Open Consultation History"
+            >
+              <History className="w-4 h-4" />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Open Consultation History</TooltipContent>
+          </Tooltip>
 
           <button
             onClick={startNewChat}
@@ -289,7 +305,34 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       <div className={`flex-1 flex flex-col overflow-hidden ${isDocumentCollapsed ? 'max-w-3xl mx-auto w-full' : 'w-full'}`}>
         {/* --- Message Stream Area --- */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth">
-          {messages.length === 0 ? (
+          {isLoadingChat ? (
+            /* Skeleton loader while a previous chat loads from the DB */
+            <div className="space-y-6" aria-label="Loading conversation">
+              {/* user bubble skeleton */}
+              <div className="flex justify-end">
+                <div className="h-9 w-56 rounded-2xl bg-[#DDF4F5]/60 animate-pulse" />
+              </div>
+              {/* assistant card skeleton */}
+              <div className="max-w-[88%] bg-white rounded-2xl p-4 sm:p-5 border border-[#E2E8F0] shadow-xs space-y-3">
+                <div className="h-3 w-2/5 rounded bg-slate-200 animate-pulse" />
+                <div className="h-3 w-11/12 rounded bg-slate-100 animate-pulse" />
+                <div className="h-3 w-10/12 rounded bg-slate-100 animate-pulse" />
+                <div className="h-3 w-8/12 rounded bg-slate-100 animate-pulse" />
+                <div className="h-16 w-full rounded-xl bg-slate-100 animate-pulse" />
+              </div>
+              {/* user bubble skeleton */}
+              <div className="flex justify-end">
+                <div className="h-9 w-72 rounded-2xl bg-[#DDF4F5]/60 animate-pulse" />
+              </div>
+              {/* assistant card skeleton */}
+              <div className="max-w-[88%] bg-white rounded-2xl p-4 sm:p-5 border border-[#E2E8F0] shadow-xs space-y-3">
+                <div className="h-3 w-1/3 rounded bg-slate-200 animate-pulse" />
+                <div className="h-3 w-9/12 rounded bg-slate-100 animate-pulse" />
+                <div className="h-3 w-11/12 rounded bg-slate-100 animate-pulse" />
+                <div className="h-3 w-7/12 rounded bg-slate-100 animate-pulse" />
+              </div>
+            </div>
+          ) : messages.length === 0 ? (
             /* Empty Chat State */
             <div className="h-full flex flex-col justify-center items-center text-center max-w-lg mx-auto py-8">
               <div className="w-14 h-14 rounded-2xl bg-white border border-[#CBD5E1] shadow-xs flex items-center justify-center text-[#087F8C] mb-4">
@@ -333,15 +376,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 <ChatMessage
                   key={msg.id}
                   message={msg}
-                  onRetry={() => {
-                    if (msg.role === 'assistant') {
-                      const lastUserMsg = messages
-                        .slice(0, messages.indexOf(msg))
-                        .filter((m) => m.role === 'user')
-                        .pop();
-                      if (lastUserMsg) sendMessage(lastUserMsg.content);
-                    }
-                  }}
                   onSelectPrompt={(p) => handlePromptClick(p)}
                 />
               ))}

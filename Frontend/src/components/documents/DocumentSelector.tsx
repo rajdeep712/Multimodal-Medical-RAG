@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
 import { MedicalDocument } from '../../types/document.ts';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 export const DocumentSelector: React.FC = () => {
   const {
@@ -259,17 +260,20 @@ export const DocumentSelector: React.FC = () => {
                           </button>
                         </div>
                       ) : (
-                        <button
-                          onClick={() => {
-                            setConfirmingDeleteId(doc.id);
-                            setDeleteError('');
-                          }}
-                          disabled={Boolean(deletingId)}
-                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                          title="Delete document"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <Tooltip>
+                          <TooltipTrigger
+                            onClick={() => {
+                              setConfirmingDeleteId(doc.id);
+                              setDeleteError('');
+                            }}
+                            disabled={Boolean(deletingId)}
+                            className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                            aria-label="Delete document"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top">Delete document</TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                   </div>

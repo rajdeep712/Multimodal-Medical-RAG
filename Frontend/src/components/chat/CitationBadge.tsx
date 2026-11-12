@@ -7,26 +7,40 @@ import { FileText, ExternalLink, BookmarkCheck, Table, ImageIcon } from 'lucide-
 interface CitationBadgeProps {
   citationNumber: number;
   citation?: Citation;
+  /** Unique identity of this badge occurrence — only the exact badge that was
+      clicked highlights, never sibling badges sharing the same evidence id. */
+  badgeIdentity?: { scope: string; evidenceId: string; occurrence: number };
 }
 
 export const CitationBadge: React.FC<CitationBadgeProps> = ({
   citationNumber,
   citation,
+  badgeIdentity,
 }) => {
-  const { setActiveCitation, activeCitation } = useCitationStore();
-  const { selectDocumentAndPage } = useDocumentStore();
+  const { setActiveCitation, activeBadge, setActiveBadge } = useCitationStore();
+  const { openDocumentAtPage } = useDocumentStore();
   const [showPreview, setShowPreview] = useState(false);
   const badgeRef = useRef<HTMLButtonElement>(null);
 
-  const isActive = activeCitation?.id === citation?.id;
+  const isActive =
+    !!badgeIdentity &&
+    !!activeBadge &&
+    activeBadge.scope === badgeIdentity.scope &&
+    activeBadge.evidenceId === badgeIdentity.evidenceId &&
+    (activeBadge.occurrence === null || activeBadge.occurrence === badgeIdentity.occurrence);
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (!citation) return;
 
-    // 1. Select document and navigate to page
-    selectDocumentAndPage(citation.documentId, citation.pageNumber);
+    // Highlight exactly this badge occurrence in the chat panel.
+    if (badgeIdentity) {
+      setActiveBadge({ ...badgeIdentity });
+    }
+    // 1. Open the document at the cited page (fetched/decrypted from S3 if
+    //    not already in memory)
+    void openDocumentAtPage(citation.documentId, citation.pageNumber ?? 1);
     // 2. Set active citation to trigger bounding box highlight & auto-scroll
     setActiveCitation(citation);
     setShowPreview(false);

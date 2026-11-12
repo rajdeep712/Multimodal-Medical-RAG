@@ -1,48 +1,110 @@
-import { useState, useCallback, createContext, useContext, ReactNode, useEffect } from 'react';
+import {
+  useState,
+  useCallback,
+  createContext,
+  useContext,
+  ReactNode,
+  useEffect,
+  useRef,
+} from 'react';
 import React from 'react';
+import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import { ChatConversation, ChatMessage } from '../types/chat.ts';
-import { chatService } from '../services/chatService.ts';
+import { Citation } from '../types/document.ts';
+import { chatService, DateRangeFilter } from '../services/chatService.ts';
 
 interface ChatStoreState {
   conversation: ChatConversation | null;
   conversations: ChatConversation[];
   isStreaming: boolean;
+  isThinking: boolean;
+  isLoadingChat: boolean;
   selectedDocumentFilters: string[];
-  dateRangeFilter: { startDate?: string; endDate?: string };
+  dateRangeFilter: DateRangeFilter;
+  sendMessage: (query: string) => void;
   toggleDocumentFilter: (docId: string) => void;
   clearDocumentFilters: () => void;
-  setDateRangeFilter: (range: { startDate?: string; endDate?: string }) => void;
-  sendMessage: (query: string) => Promise<void>;
-  startNewChat: () => Promise<void>;
-  selectConversation: (id: string) => Promise<void>;
+  setDateRangeFilter: (filter: DateRangeFilter) => void;
+  startNewChat: () => void;
+  selectConversation: (id: string) => void;
   deleteConversation: (id: string) => Promise<boolean>;
-  renameConversation: (id: string, newTitle: string) => Promise<boolean>;
+  renameConversation: (id: string, title: string) => Promise<boolean>;
 }
 
 const ChatContext = createContext<ChatStoreState | null>(null);
 
 export function ChatProvider({ children }: { children: ReactNode }) {
-  const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
+  const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
+  const [isThinking, setIsThinking] = useState<boolean>(false);
+  const [isLoadingChat, setIsLoadingChat] = useState<boolean>(false);
   const [selectedDocumentFilters, setSelectedDocumentFilters] = useState<string[]>([]);
-  const [dateRangeFilter, setDateRangeFilter] = useState<{ startDate?: string; endDate?: string }>({});
+  const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilter>({});
+
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // The active chat id comes from the URL (/c/:chatId); /workspace means a
+  // brand-new blank chat whose record is only created on the first query.
+  const chatMatch = matchPath('/c/:chatId', location.pathname);
+  const routeChatId = chatMatch?.params.chatId ?? null;
+
+  // The provider lives above <Routes> so an in-flight stream survives the
+  // /workspace -> /c/:chatId replace-navigation; these refs let the route
+  // effect distinguish "already handling it" from "deep-linked".
+  const conversationRef = useRef<ChatConversation | null>(null);
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
+  const isStreamingRef = useRef<boolean>(false);
+  useEffect(() => {
+    isStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+  const streamCloseRef = useRef<(() => void) | null>(null);
+
+  const refreshConversations = useCallback(async () => {
+    try {
+      const chats = await chatService.listChats();
+      setConversations(chats);
+    } catch (err) {
+      console.error('Could not load chat histories:', err);
+    }
+  }, []);
 
   useEffect(() => {
-    let mounted = true;
-    chatService.getConversations().then((convs) => {
-      if (mounted) {
-        setConversations(convs);
-        if (convs.length > 0) {
-          setConversation(convs[0]);
-          setSelectedDocumentFilters(convs[0].selectedDocumentIds || []);
-        }
+    void refreshConversations();
+  }, [refreshConversations]);
+
+  const loadChatById = useCallback(async (id: string) => {
+    try {
+      const chat = await chatService.getChat(id);
+      if (chat) {
+        setConversation(chat);
+        setSelectedDocumentFilters([]);
+        setDateRangeFilter({});
+        return true;
       }
-    });
-    return () => {
-      mounted = false;
-    };
+    } catch (err) {
+      console.error('Could not load the chat:', err);
+    }
+    return false;
   }, []);
+
+  // Deep-links and in-app navigation: /c/:chatId loads that chat, /workspace
+  // shows a blank chat. During an active stream the navigation is caused by
+  // this provider itself, so the in-memory conversation is kept as-is.
+  useEffect(() => {
+    if (routeChatId) {
+      if (isStreamingRef.current || conversationRef.current?.id === routeChatId) {
+        return;
+      }
+      setIsLoadingChat(true);
+      void loadChatById(routeChatId).finally(() => setIsLoadingChat(false));
+    } else if (!isStreamingRef.current) {
+      setConversation(null);
+    }
+  }, [routeChatId, loadChatById]);
 
   const toggleDocumentFilter = useCallback((docId: string) => {
     setSelectedDocumentFilters((prev) =>
@@ -54,143 +116,196 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setSelectedDocumentFilters([]);
   }, []);
 
-  const sendMessage = useCallback(
-    async (query: string) => {
-      if (!conversation || !query.trim() || isStreaming) return;
+  const updateMessage = useCallback(
+    (messageId: string, patch: Partial<ChatMessage>) => {
+      setConversation((prev) =>
+        prev
+          ? {
+              ...prev,
+              messages: prev.messages.map((m) =>
+                m.id === messageId ? { ...m, ...patch } : m
+              ),
+            }
+          : prev
+      );
+    },
+    []
+  );
 
-      const userMsg: ChatMessage = {
+  const sendMessage = useCallback(
+    (query: string) => {
+      const trimmed = query.trim();
+      if (!trimmed || isStreamingRef.current) return;
+
+      const now = new Date().toISOString();
+      const userMessage: ChatMessage = {
         id: `msg_u_${Date.now()}`,
         role: 'user',
-        content: query.trim(),
-        createdAt: new Date().toISOString(),
+        content: trimmed,
+        createdAt: now,
         status: 'complete',
       };
+      const assistantPlaceholderId = `msg_a_${Date.now()}`;
 
-      // Append user message immediately
+      // Blank chat (/workspace): build a local shell so the optimistic UI
+      // renders; the real id arrives with the chat_id SSE event.
       setConversation((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          messages: [...prev.messages, userMsg],
+        const assistantPlaceholder: ChatMessage = {
+          id: assistantPlaceholderId,
+          role: 'assistant',
+          content: '',
+          createdAt: now,
+          status: 'streaming',
         };
+        const base: ChatConversation = prev
+          ? {
+              ...prev,
+              messages: [...prev.messages, userMessage, assistantPlaceholder],
+            }
+          : {
+              id: 'pending',
+              title: trimmed.slice(0, 60),
+              createdAt: now,
+              updatedAt: now,
+              messages: [userMessage, assistantPlaceholder],
+              selectedDocumentIds: [],
+            };
+        return base;
       });
 
       setIsStreaming(true);
+      setIsThinking(true);
 
-      // Create streaming placeholder for assistant
-      const tempId = `msg_a_${Date.now()}`;
-      setConversation((prev) => {
-        if (!prev) return prev;
-        const placeholder: ChatMessage = {
-          id: tempId,
-          role: 'assistant',
-          content: '',
-          createdAt: new Date().toISOString(),
-          status: 'streaming',
-        };
-        return {
-          ...prev,
-          messages: [...prev.messages, placeholder],
-        };
-      });
+      (async () => {
+        try {
+          const pending = await chatService.sendQuery({
+            query: trimmed,
+            chatId: conversationRef.current?.id.startsWith('ch-')
+              ? conversationRef.current.id
+              : null,
+            docIds: selectedDocumentFilters,
+            dateFilter:
+              dateRangeFilter.startDate || dateRangeFilter.endDate
+                ? dateRangeFilter
+                : undefined,
+          });
 
-      try {
-        const assistantResult = await chatService.queryMedicalRAG({
-          conversationId: conversation.id,
-          query,
-          selectedDocIds: selectedDocumentFilters.length > 0 ? selectedDocumentFilters : undefined,
-          dateFilter: dateRangeFilter.startDate || dateRangeFilter.endDate ? dateRangeFilter : undefined,
-          onChunk: (_chunk, accumulated) => {
-            setConversation((prev) => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                messages: prev.messages.map((m) =>
-                  m.id === tempId ? { ...m, content: accumulated, status: 'streaming' } : m
-                ),
-              };
-            });
-          },
-        });
-
-        // Finalize message with citations and complete status
-        setConversation((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            messages: prev.messages.map((m) => (m.id === tempId ? assistantResult : m)),
-          };
-        });
-      } catch (err) {
-        console.error('Chat error:', err);
-        setConversation((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            messages: prev.messages.map((m) =>
-              m.id === tempId
-                ? {
-                    ...m,
-                    content: 'An error occurred while synthesizing evidence from your medical documents. Please retry.',
-                    status: 'error',
-                  }
-                : m
-            ),
-          };
-        });
-      } finally {
-        setIsStreaming(false);
-      }
+          streamCloseRef.current = chatService.streamAnswer(
+            pending.chatId,
+            pending.streamToken,
+            {
+              onChatId: (chatId) => {
+                // New chat: adopt the server-generated id and update the
+                // URL without a reload.
+                setConversation((prev) => (prev ? { ...prev, id: chatId } : prev));
+                navigate(`/c/${chatId}`, { replace: true });
+              },
+              onCitations: (citations: Citation[]) => {
+                // The backend emits the used citations after the full answer
+                // stream; attaching them reveals the sources panel.
+                updateMessage(assistantPlaceholderId, { citations });
+              },
+              onDelta: (chunk) => {
+                // The first streamed token ends the thinking phase.
+                setIsThinking(false);
+                setConversation((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        messages: prev.messages.map((m) =>
+                          m.id === assistantPlaceholderId
+                            ? { ...m, content: m.content + chunk, status: 'streaming' }
+                            : m
+                        ),
+                      }
+                    : prev
+                );
+              },
+              onDone: () => {
+                updateMessage(assistantPlaceholderId, { status: 'complete' });
+                setIsStreaming(false);
+                setIsThinking(false);
+                void refreshConversations();
+              },
+              onError: (message) => {
+                updateMessage(assistantPlaceholderId, {
+                  content: message,
+                  status: 'error',
+                });
+                setIsStreaming(false);
+                setIsThinking(false);
+              },
+            }
+          );
+        } catch (err: any) {
+          updateMessage(assistantPlaceholderId, {
+            content: err?.message || 'Could not send the message',
+            status: 'error',
+          });
+          setIsStreaming(false);
+          setIsThinking(false);
+        }
+      })();
     },
-    [conversation, isStreaming, selectedDocumentFilters, dateRangeFilter]
+    [navigate, refreshConversations, selectedDocumentFilters, dateRangeFilter, updateMessage]
   );
 
-  const startNewChat = useCallback(async () => {
-    const newConv = await chatService.createConversation('New Medical Consultation');
-    setConversations((prev) => [newConv, ...prev]);
-    setConversation(newConv);
-    setSelectedDocumentFilters(['doc_cbc_2026', 'doc_rx_2026', 'doc_xray_2026']);
+  // Close any open stream when the provider unmounts.
+  useEffect(() => {
+    return () => {
+      streamCloseRef.current?.();
+    };
   }, []);
 
-  const selectConversation = useCallback(async (id: string) => {
-    const conv = await chatService.getConversation(id);
-    if (conv) {
-      setConversation(conv);
-      setSelectedDocumentFilters(conv.selectedDocumentIds || []);
-    }
-  }, []);
+  const startNewChat = useCallback(() => {
+    streamCloseRef.current?.();
+    setIsStreaming(false);
+    setIsThinking(false);
+    setConversation(null);
+    navigate('/workspace', { replace: true });
+  }, [navigate]);
+
+  const selectConversation = useCallback(
+    (id: string) => {
+      navigate(`/c/${id}`);
+    },
+    [navigate]
+  );
 
   const deleteConversation = useCallback(
     async (id: string) => {
-      const success = await chatService.deleteConversation(id);
-      if (success) {
-        setConversations((prev) => {
-          const next = prev.filter((c) => c.id !== id);
-          if (conversation?.id === id) {
-            if (next.length > 0) {
-              setConversation(next[0]);
-              setSelectedDocumentFilters(next[0].selectedDocumentIds || []);
-            } else {
-              setConversation(null);
-            }
+      try {
+        const success = await chatService.deleteChat(id);
+        if (success) {
+          setConversations((prev) => prev.filter((conv) => conv.id !== id));
+          if (conversationRef.current?.id === id) {
+            setConversation(null);
+            navigate('/workspace', { replace: true });
           }
-          return next;
-        });
+        }
+        return success;
+      } catch (err) {
+        console.error('Could not delete the chat:', err);
+        return false;
       }
-      return success;
     },
-    [conversation]
+    [navigate]
   );
 
-  const renameConversation = useCallback(async (id: string, newTitle: string) => {
-    const success = await chatService.renameConversation(id, newTitle);
-    if (success) {
-      setConversations((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, title: newTitle } : c))
-      );
-      setConversation((prev) => (prev?.id === id ? { ...prev, title: newTitle } : prev));
+  const renameConversation = useCallback(async (id: string, title: string) => {
+    try {
+      const success = await chatService.renameChat(id, title);
+      if (success) {
+        setConversations((prev) =>
+          prev.map((conv) => (conv.id === id ? { ...conv, title } : conv))
+        );
+        setConversation((prev) => (prev?.id === id ? { ...prev, title } : prev));
+      }
+      return success;
+    } catch (err) {
+      console.error('Could not rename the chat:', err);
+      return false;
     }
-    return success;
   }, []);
 
   return React.createElement(
@@ -200,12 +315,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         conversation,
         conversations,
         isStreaming,
+        isThinking,
+        isLoadingChat,
         selectedDocumentFilters,
         dateRangeFilter,
+        sendMessage,
         toggleDocumentFilter,
         clearDocumentFilters,
         setDateRangeFilter,
-        sendMessage,
         startNewChat,
         selectConversation,
         deleteConversation,

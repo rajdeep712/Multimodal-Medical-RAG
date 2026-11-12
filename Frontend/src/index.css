@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Theme tokens for the shared UI primitives (tooltip etc.) — the tooltip
+   renders as a dark chip on the light app and flips in dark mode. */
+@theme {
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;
@@ -11,6 +18,8 @@
 }
 
 .dark {
+  --color-background: #0b132b;
+  --color-foreground: #e2e8f0;
   color-scheme: dark;
 }
 .dark body {
@@ -53,6 +62,33 @@
 .animate-citation-pulse {
   animation: citation-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* Shimmering "Thinking..." text on the dark thinking pill */
+@keyframes thinking-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.thinking-shimmer {
+  background: linear-gradient(
+    90deg,
+    #94a3b8 0%,
+    #94a3b8 35%,
+    #0f172a 50%,
+    #94a3b8 65%,
+    #94a3b8 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 2.2s linear infinite;
+}
+
 
 /* ECG pulse: a bright heartbeat trace drawn over a faint baseline */
 @keyframes ecg-pulse {
