@@ -13,15 +13,35 @@ logger = logging.getLogger(__name__)
 TEXT_VECTOR_SIZE = 1024
 IMAGE_VECTOR_SIZE = 512
 
+# Process-wide shared client — avoids a fresh TLS/TCP handshake to the cloud
+# cluster on every chat query (first-token latency critical path).
+_shared_client: AsyncQdrantClient | None = None
 
-class QdrantStore:
-    """Thin wrapper around AsyncQdrantClient for the medical_documents collection."""
 
-    def __init__(self, client: AsyncQdrantClient | None = None) -> None:
-        self._owns_client = client is None
-        self.client = client or AsyncQdrantClient(
+def get_shared_client() -> AsyncQdrantClient:
+    global _shared_client
+    if _shared_client is None:
+        _shared_client = AsyncQdrantClient(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key or None,
+        )
+    return _shared_client
+
+
+class QdrantStore:
+    """Thin wrapper around AsyncQdrantClient for the medical_documents collection.
+
+    Pass no client to own a private one (ingestion), or share the process-wide
+    client (chat retrieval) so the connection is reused across queries.
+    """
+
+    def __init__(self, client: AsyncQdrantClient | None = None, shared: bool = False) -> None:
+        self._owns_client = client is None and not shared
+        self.client = client or (
+            get_shared_client() if shared else AsyncQdrantClient(
+                url=settings.qdrant_url,
+                api_key=settings.qdrant_api_key or None,
+            )
         )
 
     async def ensure_collection(self) -> None:

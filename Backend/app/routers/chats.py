@@ -84,6 +84,55 @@ def _used_evidence_ids(content: str) -> set[str]:
 # in the same process that issued the token.
 _pending_streams: dict[str, dict[str, Any]] = {}
 
+# Shared httpx client for the BioMedCLIP text endpoint — a fresh client per
+# query would open a new TCP connection during inference (latency critical).
+_biomedclip_http_client: httpx.AsyncClient | None = None
+
+
+def _get_biomedclip_http_client() -> httpx.AsyncClient:
+    global _biomedclip_http_client
+    if _biomedclip_http_client is None or _biomedclip_http_client.is_closed:
+        _biomedclip_http_client = httpx.AsyncClient(timeout=200)
+    return _biomedclip_http_client
+
+
+async def close_biomedclip_http_client() -> None:
+    global _biomedclip_http_client
+    if _biomedclip_http_client is not None and not _biomedclip_http_client.is_closed:
+        await _biomedclip_http_client.aclose()
+    _biomedclip_http_client = None
+
+
+# chat_id -> cancel event for an ACTIVE answer stream. The stop endpoint sets
+# it; the stream generator checks it at every cancellation point.
+_cancel_events: dict[str, asyncio.Event] = {}
+
+
+@router.post("/{chat_id}/stop", status_code=status.HTTP_200_OK)
+async def stop_chat_stream(
+    chat_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Stop an in-flight answer: cancel pending retrieval or abort the LLM
+    stream midway; whatever content was generated is persisted by the stream
+    generator's cleanup."""
+    chat = await db.scalar(
+        select(ChatHistory.id).where(
+            ChatHistory.id == chat_id,
+            ChatHistory.user_id == user.id,
+        )
+    )
+    if chat is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown chat")
+
+    cancel_event = _cancel_events.pop(chat_id, None)
+    if cancel_event is not None:
+        cancel_event.set()
+    # Best-effort: also close the SSE connection server-side by flagging the
+    # stream; the generator's cancellation points handle the rest.
+    return {"stopped": True}
+
 
 class ChatCreateRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8000)
@@ -251,6 +300,12 @@ async def stream_chat_answer(
             )
 
         try:
+            cancel_event = asyncio.Event()
+            _cancel_events[chat_id] = cancel_event
+
+            def _cancelled() -> bool:
+                return cancel_event.is_set()
+
             if job["is_new_chat"]:
                 yield {
                     "event": "chat_id",
@@ -263,12 +318,18 @@ async def stream_chat_answer(
                 user_id=job["user_id"],
                 query=job["query"][:200],
             ):
-                async with httpx.AsyncClient(timeout=200) as http_client:
-                    text_embedding, clip_embedding = await embed_query_texts(
-                        job["query"], http_client
-                    )
+                # Shared client: no new TCP handshake to the CLIP service
+                # during inference.
+                text_embedding, clip_embedding = await embed_query_texts(
+                    job["query"], _get_biomedclip_http_client()
+                )
+                if _cancelled():
+                    _cancel_events.pop(chat_id, None)
+                    return
 
-                store = QdrantStore()
+                # Shared client: the TLS connection to the cloud cluster is
+                # established once and reused across queries.
+                store = QdrantStore(shared=True)
                 try:
                     points = await hybrid_multimodal_search(
                         store.client,
@@ -282,16 +343,46 @@ async def stream_chat_answer(
                     )
                 finally:
                     await store.close()
+                if _cancelled():
+                    _cancel_events.pop(chat_id, None)
+                    return
 
                 ret_points, citations, images_to_fetch = select_context_points(points)
                 image_rows = await fetch_images_base64(images_to_fetch)
+                if _cancelled():
+                    _cancel_events.pop(chat_id, None)
+                    return
                 content_by_evidence = {
                     point["evidence_id"]: point.get("content") for point in ret_points
                 }
 
-                async for delta in _stream_answer(job["query"], ret_points, image_rows):
-                    content_parts.append(delta)
-                    yield {"event": "delta", "data": json.dumps({"delta": delta})}
+                # LLM stream with a deterministic abort: closing the generator
+                # closes the underlying provider HTTP connection midway.
+                llm_gen = _stream_answer(job["query"], ret_points, image_rows)
+                stopped_midway = False
+                try:
+                    async for delta in llm_gen:
+                        content_parts.append(delta)
+                        yield {"event": "delta", "data": json.dumps({"delta": delta})}
+                        if _cancelled():
+                            stopped_midway = True
+                            break
+                finally:
+                    await llm_gen.aclose()
+
+                if stopped_midway:
+                    # Persist the partial answer + its used citations, then end
+                    # the stream (the frontend has already stopped listening).
+                    await persist_answer()
+                    persisted = True
+                    _cancel_events.pop(chat_id, None)
+                    yield {
+                        "event": "stopped",
+                        "data": json.dumps(
+                            {"message_id": ai_message_id, "content_length": len("".join(content_parts))}
+                        ),
+                    }
+                    return
 
                 # The sources panel shows only the evidence the answer actually
                 # cited, emitted once the full response has been streamed.
@@ -350,6 +441,7 @@ async def stream_chat_answer(
                 "data": json.dumps({"error": stream_error}),
             }
         finally:
+            _cancel_events.pop(chat_id, None)
             # Partial answer (client disconnected mid-stream): schedule the
             # persistence as a detached task — awaiting inside the finally of
             # a closing async generator would silently fail.

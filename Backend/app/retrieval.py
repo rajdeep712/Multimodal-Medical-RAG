@@ -8,6 +8,7 @@ mandatory user_id plus optional doc_ids / ingestion date range.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -18,7 +19,7 @@ from sqlalchemy import select, tuple_
 import logfire
 
 from .config import settings
-from .ingestion.embeddings import build_embedding_model
+from .ingestion.embeddings import get_embedding_model
 from .ingestion.pii import post_with_retry
 
 logger = logging.getLogger(__name__)
@@ -29,24 +30,32 @@ async def embed_query_texts(query: str, http_client: httpx.AsyncClient) -> tuple
 
     Notebook cells 3-5: text_embedding via the local OpenAI-compatible
     embedding model; img_embedding via the BioMedCLIP text endpoint.
+    Both calls run in PARALLEL — they are independent, and this is the
+    first-token-latency critical path of the chat stream.
     """
-    embedding_model = build_embedding_model()
-    text_embedding = await embedding_model.aembed_query(query)
+    embedding_model = get_embedding_model()
 
-    clip_response = await post_with_retry(
-        http_client,
-        settings.biomedclip_text_url,
-        {"text": query},
-        label="biomedclip-text-embedding",
-        timeout=180,
+    async def _clip_embedding() -> list[float]:
+        clip_response = await post_with_retry(
+            http_client,
+            settings.biomedclip_text_url,
+            {"text": query},
+            label="biomedclip-text-embedding",
+            timeout=180,
+        )
+        clip_response.raise_for_status()
+        image_embedding = clip_response.json()["embedding"]
+        if len(image_embedding) != 512:
+            raise ValueError("Expected 512D BioMedCLIP embedding")
+        return image_embedding
+
+    text_embedding, image_embedding = await asyncio.gather(
+        embedding_model.aembed_query(query),
+        _clip_embedding(),
     )
-    clip_response.raise_for_status()
-    image_embedding = clip_response.json()["embedding"]
 
     if len(text_embedding) != 1024:
         raise ValueError("Expected 1024D text embedding")
-    if len(image_embedding) != 512:
-        raise ValueError("Expected 512D BioMedCLIP embedding")
 
     return text_embedding, image_embedding
 

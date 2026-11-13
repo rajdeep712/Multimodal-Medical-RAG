@@ -465,12 +465,20 @@ def _llm_settings() -> dict[str, str]:
     }
 
 
+# Cached per (base_url, api_key) — a fresh AsyncOpenAI would open a new TLS
+# connection pool to the provider on every query (first-token latency).
+_client_cache: dict[tuple[str, str], AsyncOpenAI] = {}
+
+
 def _client() -> AsyncOpenAI:
     llm = _llm_settings()
-    return AsyncOpenAI(
-        base_url=llm["base_url"],
-        api_key=llm["api_key"],
-    )
+    key = (llm["base_url"], llm["api_key"])
+    if key not in _client_cache:
+        _client_cache[key] = AsyncOpenAI(
+            base_url=llm["base_url"],
+            api_key=llm["api_key"],
+        )
+    return _client_cache[key]
 
 
 async def stream_answer(
