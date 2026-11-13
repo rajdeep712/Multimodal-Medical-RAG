@@ -51,14 +51,14 @@ export const DocumentToolbar: React.FC = () => {
 
   return (
     <div className="h-12 bg-white border-b border-[#E2E8F0] px-3 sm:px-4 flex items-center justify-between text-xs text-[#334155] select-none shrink-0">
-      {/* Left: Page Navigator */}
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      {/* Left: Page Navigator (segmented pill) */}
+      <div className="flex items-center gap-1 bg-[#F8FAFC] p-1 rounded-xl border border-[#E2E8F0]">
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex rounded-lg" />}>
             <button
               onClick={handlePrevPage}
               disabled={currentPage <= 1}
-              className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:pointer-events-none transition-colors cursor-pointer disabled:cursor-not-allowed"
+              className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] disabled:opacity-40 disabled:hover:bg-transparent disabled:pointer-events-none transition-all cursor-pointer disabled:cursor-not-allowed"
               aria-label="Previous Page"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -67,8 +67,8 @@ export const DocumentToolbar: React.FC = () => {
           <TooltipContent side="bottom">{currentPage <= 1 ? 'No previous pages' : 'Previous Page'}</TooltipContent>
         </Tooltip>
 
-        <div className="flex items-center gap-1 font-medium">
-          <span>Page</span>
+        <div className="flex items-center gap-1 font-medium px-0.5">
+          <span className="text-[11px] text-[#64748B]">Page</span>
           <input
             type="number"
             min={1}
@@ -80,9 +80,9 @@ export const DocumentToolbar: React.FC = () => {
                 setCurrentPage(val);
               }
             }}
-            className="w-10 text-center py-0.5 rounded border border-[#CBD5E1] bg-[#F8FAFC] font-semibold text-[#123047] focus:outline-none focus:border-[#087F8C]"
+            className="w-9 text-center h-6 rounded-md border border-[#CBD5E1] bg-white font-semibold text-[#123047] focus:outline-none focus:border-[#087F8C] focus:ring-2 focus:ring-[#087F8C]/15"
           />
-          <span className="text-[#64748B]">of {totalPages}</span>
+          <span className="text-[11px] text-[#64748B]">of {totalPages}</span>
         </div>
 
         <Tooltip>
@@ -90,7 +90,7 @@ export const DocumentToolbar: React.FC = () => {
             <button
               onClick={handleNextPage}
               disabled={currentPage >= totalPages}
-              className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent disabled:pointer-events-none transition-colors cursor-pointer disabled:cursor-not-allowed"
+              className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] disabled:opacity-40 disabled:hover:bg-transparent disabled:pointer-events-none transition-all cursor-pointer disabled:cursor-not-allowed"
               aria-label="Next Page"
             >
               <ChevronRight className="w-4 h-4" />
@@ -100,7 +100,7 @@ export const DocumentToolbar: React.FC = () => {
         </Tooltip>
       </div>
 
-      {/* Center: Zoom Controls */}
+      {/* Center: Zoom Controls (segmented pill) */}
       <div className="hidden md:flex items-center gap-1 bg-[#F8FAFC] p-1 rounded-xl border border-[#E2E8F0]">
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex rounded-lg" />}>
@@ -116,7 +116,7 @@ export const DocumentToolbar: React.FC = () => {
           <TooltipContent side="bottom">{zoomLevel <= 50 ? 'Minimum zoom reached' : 'Zoom Out'}</TooltipContent>
         </Tooltip>
 
-        <span className="px-2 font-mono text-[11px] font-semibold text-[#123047]">
+        <span className="px-2 font-mono text-[11px] font-semibold text-[#123047] tabular-nums">
           {zoomLevel}%
         </span>
 
@@ -151,12 +151,12 @@ export const DocumentToolbar: React.FC = () => {
         </button>
       </div>
 
-      {/* Right: Actions (Rotate, Download, Fullscreen) */}
-      <div className="flex items-center gap-1 sm:gap-1.5">
+      {/* Right: Actions (segmented pill) */}
+      <div className="flex items-center gap-1 bg-[#F8FAFC] p-1 rounded-xl border border-[#E2E8F0]">
         <Tooltip>
           <TooltipTrigger
             onClick={handleRotate}
-            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
+            className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
             aria-label="Rotate Page"
           >
             <RotateCw className="w-3.5 h-3.5" />
@@ -167,7 +167,7 @@ export const DocumentToolbar: React.FC = () => {
         <Tooltip>
           <TooltipTrigger
             onClick={handleDownload}
-            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#087F8C] transition-colors cursor-pointer"
+            className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#087F8C] transition-colors cursor-pointer"
             aria-label="Download Medical Record"
           >
             <Download className="w-3.5 h-3.5" />
@@ -187,7 +187,7 @@ export const DocumentToolbar: React.FC = () => {
                 }
               }
             }}
-            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
+            className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
             aria-label="Toggle Fullscreen Mode"
           >
             <Maximize2 className="w-3.5 h-3.5" />

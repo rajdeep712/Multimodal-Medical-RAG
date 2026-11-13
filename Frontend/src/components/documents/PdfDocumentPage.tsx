@@ -95,13 +95,13 @@ export const PdfDocumentPage: React.FC<PdfDocumentPageProps> = ({
 
   return (
     <div
-      className="flex justify-center py-4 transition-transform duration-150 origin-top"
+      className="flex justify-center py-5 transition-transform duration-150 origin-top"
       style={{ transform: `rotate(${rotation}deg)` }}
     >
       <div
         ref={pageRef}
         id={`pdf-page-${pageNumber}`}
-        className="relative bg-white shadow-xl border border-[#CBD5E1] rounded-lg overflow-hidden"
+        className="relative bg-white shadow-[0_6px_28px_rgba(15,23,42,0.14)] ring-1 ring-black/5 rounded-lg overflow-hidden"
       >
         <canvas ref={canvasRef} className="block" />
         <CitationHighlightOverlay

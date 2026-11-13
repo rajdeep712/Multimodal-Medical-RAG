@@ -74,7 +74,7 @@ export const DocumentSelector: React.FC = () => {
           setDeleteError('');
           if (deletingId) setConfirmingDeleteId(null);
         }}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-[#CBD5E1] hover:border-[#087F8C] hover:bg-[#F8FAFC] transition-all shadow-2xs group cursor-pointer"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-[#CBD5E1] hover:border-[#087F8C] hover:bg-[#F8FAFC] transition-all shadow-sm hover:shadow-md group cursor-pointer"
         title="Browse and switch uploaded medical documents"
       >
         <div className="w-5 h-5 rounded-md bg-[#DDF4F5] text-[#087F8C] flex items-center justify-center shrink-0">

@@ -87,6 +87,59 @@
   animation: citation-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+/* Entrance animations used by dropdowns/panels (animate-in fade-in zoom-in-95
+   etc.). The tw-animate plugin is not installed, so these utilities are
+   implemented here directly. */
+@keyframes enter-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes enter-zoom-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes enter-slide-top {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes enter-slide-bottom {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes exit-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.animate-in {
+  animation: enter-fade-in 150ms ease-out;
+}
+.animate-in.fade-in {
+  animation: enter-fade-in 150ms ease-out;
+}
+.animate-in.zoom-in-95 {
+  animation: enter-zoom-in 150ms ease-out;
+}
+.animate-in.slide-in-from-top-2 {
+  animation: enter-slide-top 150ms ease-out;
+}
+.animate-in.slide-in-from-bottom-2 {
+  animation: enter-slide-bottom 150ms ease-out;
+}
+.animate-out {
+  animation: exit-fade-out 150ms ease-in;
+}
+.animate-in.fade-in.slide-in-from-bottom-2.duration-150,
+.animate-in.duration-150 {
+  animation-duration: 150ms;
+}
+.animate-in.duration-100 {
+  animation-duration: 100ms;
+}
+.animate-in.duration-200 {
+  animation-duration: 200ms;
+}
+
 /* Shimmering "Thinking..." text on the dark thinking pill */
 @keyframes thinking-shimmer {
   0% {

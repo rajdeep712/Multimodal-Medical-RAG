@@ -21,7 +21,7 @@ import {
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const DocumentSkeleton: React.FC = () => (
-  <div id="document-viewport-container" className="relative h-full flex flex-col bg-[#E2E8F0] overflow-hidden">
+  <div id="document-viewport-container" className="relative h-full flex flex-col bg-gradient-to-b from-[#EEF2F7] to-[#DFE6EE] overflow-hidden">
     <div className="h-12 bg-white border-b border-[#E2E8F0] px-4 flex items-center justify-between animate-pulse">
       <div className="flex items-center gap-3">
         <div className="h-6 w-20 rounded-lg bg-slate-200" />
@@ -59,7 +59,7 @@ const DocumentSkeleton: React.FC = () => (
       </div>
     </div>
     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-      <div className="rounded-2xl border border-[#CBD5E1] bg-white/95 px-6 py-5 shadow-xl text-center">
+      <div className="rounded-2xl border border-[#CBD5E1]/80 bg-white/95 backdrop-blur px-6 py-5 shadow-xl ring-1 ring-black/5 text-center">
         <Loader2 className="w-6 h-6 animate-spin text-[#087F8C] mx-auto mb-2" />
         <p className="text-sm font-bold text-[#123047]">Verifying signature & decrypting document</p>
         <p className="text-xs text-[#64748B] mt-1">Streaming the secure PDF from private storage</p>
@@ -204,9 +204,12 @@ export const DocumentViewer: React.FC = () => {
     }
 
     return (
-      <div className="h-full flex flex-col items-center justify-center p-8 bg-[#F1F5F9] text-center">
-        <div className="w-16 h-16 rounded-2xl bg-white border border-[#CBD5E1] shadow-sm flex items-center justify-center text-[#087F8C] mb-4">
-          <FileSearch className="w-8 h-8" />
+      <div className="h-full flex flex-col items-center justify-center p-8 bg-gradient-to-b from-[#F8FAFC] to-[#EDF2F7] text-center">
+        <div className="relative mb-6">
+          <div className="absolute inset-0 -m-3 rounded-3xl bg-[#DDF4F5]/40 blur-md" />
+          <div className="relative w-16 h-16 rounded-2xl bg-gradient-to-br from-[#123047] to-[#087F8C] text-white shadow-lg flex items-center justify-center">
+            <FileSearch className="w-8 h-8" />
+          </div>
         </div>
         <h3 className="text-lg font-bold text-[#123047] mb-2">No document selected</h3>
         <p className="text-xs sm:text-sm text-[#64748B] max-w-sm mb-6 leading-relaxed">
@@ -254,15 +257,21 @@ export const DocumentViewer: React.FC = () => {
   const pageNumber = Math.max(1, Math.min(currentPage, pdfDocument.numPages));
 
   return (
-    <div id="document-viewport-container" className="relative h-full flex flex-col bg-[#E2E8F0] overflow-hidden">
+    <div id="document-viewport-container" className="relative h-full flex flex-col bg-gradient-to-b from-[#EEF2F7] to-[#DFE6EE] overflow-hidden">
       <DocumentToolbar />
-      <div className="flex-1 overflow-auto p-4 sm:p-6 flex justify-center items-start">
+      <div className="flex-1 overflow-auto p-5 sm:p-8 flex justify-center items-start">
         <PdfDocumentPage
           pdfDocument={pdfDocument}
           pageNumber={pageNumber}
           zoomLevel={zoomLevel}
           rotation={rotation}
         />
+      </div>
+      {/* Floating page indicator */}
+      <div className="absolute bottom-4 right-5 z-20 pointer-events-none">
+        <div className="px-3 py-1 rounded-full bg-white/90 backdrop-blur border border-[#CBD5E1]/70 shadow-md text-[10px] font-bold text-[#334155] tabular-nums">
+          Page {pageNumber} / {pdfDocument.numPages}
+        </div>
       </div>
     </div>
   );
