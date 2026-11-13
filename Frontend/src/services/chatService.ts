@@ -232,6 +232,18 @@ export const chatService = {
     return close;
   },
 
+  /** Ask the backend to stop the in-flight answer for this chat. Best-effort:
+   * the stream generator also detects the closed EventSource connection and
+   * persists whatever was generated, so a failed call is safe to ignore. */
+  async stopStream(chatId: string): Promise<boolean> {
+    try {
+      await apiRequest(API_CONFIG.endpoints.chat.stop(chatId), { method: 'POST' });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
   async deleteChat(id: string): Promise<boolean> {
     const response = await fetch(
       `${API_CONFIG.baseURL}${API_CONFIG.endpoints.chat.delete(id)}`,

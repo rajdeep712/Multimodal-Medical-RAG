@@ -1,13 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User, Settings, FolderArchive, LogOut, ChevronDown, Check, Sun, Moon } from 'lucide-react';
+import { User, Settings, FolderArchive, LogOut, ChevronDown, Check } from 'lucide-react';
 import { useAuth } from '../../stores/useAuthStore.ts';
-import { useThemeStore } from '../../stores/useThemeStore.ts';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 export const ProfileDropdown: React.FC = () => {
   const { user, logout } = useAuth();
-  const { theme, toggleTheme } = useThemeStore();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -89,26 +87,6 @@ export const ProfileDropdown: React.FC = () => {
             >
               <FolderArchive className="w-4 h-4 text-[#087F8C]" />
               <span>My Uploaded Documents</span>
-            </button>
-
-            <button
-              onClick={() => {
-                toggleTheme();
-                setIsOpen(false);
-              }}
-              className="w-full px-4 py-2 text-left flex items-center justify-between hover:bg-[#F8FAFC] transition-colors cursor-pointer border-t border-slate-100"
-            >
-              <div className="flex items-center gap-2.5">
-                {theme === 'dark' ? (
-                  <Moon className="w-4 h-4 text-[#087F8C]" />
-                ) : (
-                  <Sun className="w-4 h-4 text-[#087F8C]" />
-                )}
-                <span>Theme: {theme === 'dark' ? 'Dark Mode' : 'Clinical Light'}</span>
-              </div>
-              <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold">
-                {theme === 'dark' ? 'Dark' : 'Light'}
-              </span>
             </button>
           </div>
 

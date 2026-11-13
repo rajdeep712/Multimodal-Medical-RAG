@@ -1,10 +1,22 @@
 @import "tailwindcss";
 
-/* Theme tokens for the shared UI primitives (tooltip etc.) — the tooltip
-   renders as a dark chip on the light app and flips in dark mode. */
+/* Theme tokens for the shared UI primitives (tooltip, button, calendar).
+   Light values match the app palette; the .dark block overrides them. */
 @theme {
   --color-background: #f8fafc;
   --color-foreground: #0f172a;
+  --color-primary: #087f8c;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #ddf4f5;
+  --color-secondary-foreground: #123047;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
+  --color-border: #e2e8f0;
+  --color-ring: #087f8c;
+  --color-destructive: #dc2626;
+  --color-input: #e2e8f0;
 }
 
 @layer base {
@@ -20,6 +32,18 @@
 .dark {
   --color-background: #0b132b;
   --color-foreground: #e2e8f0;
+  --color-primary: #0d94a3;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #123c44;
+  --color-secondary-foreground: #ddf4f5;
+  --color-muted: #1c2a44;
+  --color-muted-foreground: #94a3b8;
+  --color-popover: #14213a;
+  --color-popover-foreground: #e2e8f0;
+  --color-border: #24354f;
+  --color-ring: #0d94a3;
+  --color-destructive: #ef4444;
+  --color-input: #24354f;
   color-scheme: dark;
 }
 .dark body {

@@ -1,30 +1,37 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import Lenis from 'lenis';
+import { format, isSameDay, isToday, isYesterday } from 'date-fns';
 import {
-  FileSearch,
-  Plus,
+  Menu,
   Sparkles,
-  History,
   MessageSquare,
   HelpCircle,
   FileCheck,
+  ChevronDown,
   ChevronRight,
   Stethoscope,
+  PanelLeftOpen,
   PanelRightOpen,
   Download,
   FileText,
   Printer,
-  Sun,
-  Moon,
 } from 'lucide-react';
 import { useChatStore } from '../../stores/useChatStore.ts';
-import { useThemeStore } from '../../stores/useThemeStore.ts';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 import { ChatMessage } from './ChatMessage.tsx';
 import { ChatComposer } from './ChatComposer.tsx';
 import { ConversationSidebar } from './ConversationSidebar.tsx';
 import { ProfileDropdown } from '../profile/ProfileDropdown.tsx';
+
+/** Centered date chip label for the chat stream: Today / Yesterday /
+    weekday (within a week) / full date for older days. */
+const dayLabel = (iso: string): string => {
+  const d = new Date(iso);
+  if (isToday(d)) return 'Today';
+  if (isYesterday(d)) return 'Yesterday';
+  const daysBack = Math.floor((Date.now() - d.getTime()) / 86400000);
+  if (daysBack < 7) return format(d, 'EEEE');
+  return format(d, 'dd MMMM yyyy');
+};
 
 const SUGGESTED_PROMPTS = [
   {
@@ -60,16 +67,38 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 }) => {
   const {
     conversation,
-    startNewChat,
     sendMessage,
     isStreaming,
     isLoadingChat,
   } = useChatStore();
-  const { theme, toggleTheme } = useThemeStore();
 
   const [showHistory, setShowHistory] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Exporting needs an opened chat with messages to export.
+  const canExport = !!conversation && conversation.messages.length > 0;
+
+  // "Scroll to bottom" button: visible once the user scrolls up past a
+  // threshold. While the user is away from the bottom, the per-delta
+  // stick-to-bottom during streaming pauses (they may be reading history);
+  // clicking the button (or reaching the bottom) resumes it.
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const isAtBottomRef = useRef(true);
+
+  const handleScrollerScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollButton(distanceFromBottom > 250);
+    isAtBottomRef.current = distanceFromBottom < 80;
+  };
+
+  const scrollToBottom = () => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: 'smooth',
+    });
+  };
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // Close export menu on click outside
@@ -135,37 +164,51 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     setShowExportMenu(false);
   };
 
-  // Lenis smooth momentum scrolling setup
+  // Scroll anchoring: when a query is sent, position the user's message just
+  // below the navbar (16px separation) so the thinking orb and the streamed
+  // answer unfold right under it. Restores and completed answers keep their
+  // own behaviour. (Native scrolling — Lenis was removed here: it
+  // initialised before content existed, computed a scroll limit of 0 and
+  // then pinned all programmatic scrolling.)
+  const prevChatIdRef = useRef<string | null>(null);
+  const lastQueryScrollRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!scrollRef.current) return;
-    const lenis = new Lenis({
-      wrapper: scrollRef.current,
-      content: scrollRef.current.firstElementChild as HTMLElement,
-      lerp: 0.12,
-      smoothWheel: true,
-    });
+    const scroller = scrollRef.current;
+    const messages = conversation?.messages || [];
+    if (!scroller || !messages.length) return;
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+    const chatChanged = prevChatIdRef.current !== conversation.id;
+    prevChatIdRef.current = conversation.id;
 
-    function raf(time: number) {
-      lenis.raf(time);
-      requestAnimationFrame(raf);
+    // While a query streams: anchor the query just below the navbar ONCE, then
+    // follow the bottom per delta so the streamed answer stays visible (the
+    // query scrolls away as the answer outgrows the viewport — ChatGPT-style).
+    if (isStreaming && lastUser) {
+      if (lastUser.id !== lastQueryScrollRef.current) {
+        lastQueryScrollRef.current = lastUser.id;
+        const el = scroller.querySelector(`[data-message-id="${lastUser.id}"]`);
+        if (!el) return;
+        const top =
+          el.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top +
+          scroller.scrollTop -
+          16;
+        scroller.scrollTo({ top: Math.max(0, top), behavior: 'instant' });
+        isAtBottomRef.current = false;
+      } else if (isAtBottomRef.current) {
+        // Follow the stream only while the user is at the bottom; if they
+        // scrolled up to read, the scroll-to-bottom button takes over.
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' });
+      }
+      return;
     }
-    const animId = requestAnimationFrame(raf);
 
-    return () => {
-      cancelAnimationFrame(animId);
-      lenis.destroy();
-    };
-  }, []);
-
-  // Auto-scroll to bottom on new messages with smooth behavior
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: 'smooth',
-      });
+    // Restored or switched chat: land at the bottom. A completed answer does
+    // not re-scroll, so the view stays anchored on the query.
+    if (!isStreaming && chatChanged) {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
     }
-  }, [conversation?.messages, isStreaming]);
+  }, [conversation, isStreaming]);
 
   const handlePromptClick = (prompt: string) => {
     sendMessage(prompt);
@@ -173,29 +216,57 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   const messages = conversation?.messages || [];
 
+  // While the document panel is collapsed the history docks open as an inline
+  // left column; restoring the panel returns to the overlay drawer (closed).
+  useEffect(() => {
+    if (isDocumentCollapsed) {
+      setShowHistory(true);
+    } else {
+      setShowHistory(false);
+    }
+  }, [isDocumentCollapsed]);
+
+  const historyDocked = isDocumentCollapsed && showHistory;
+
   return (
-    <div className="h-full flex flex-col bg-[#F7FAFC] border-r border-[#E2E8F0] select-text relative">
-      {/* Conversation Sidebar Drawer (opens over chat screen, closes on outside click) */}
-      <ConversationSidebar
-        isOpen={showHistory}
-        onClose={() => setShowHistory(false)}
-      />
+    <div
+      className={`h-full bg-[#F7FAFC] border-r border-[#E2E8F0] select-text relative ${
+        historyDocked ? 'flex flex-row' : 'flex flex-col'
+      }`}
+    >
+      {/* Docked history column (document panel collapsed) — stays mounted so
+          the exit slide plays when it closes */}
+      {isDocumentCollapsed && (
+        <ConversationSidebar isOpen={showHistory} onClose={() => setShowHistory(false)} docked />
+      )}
+
+      {/* Overlay drawer (document panel open — unchanged behaviour) */}
+      {!isDocumentCollapsed && (
+        <ConversationSidebar
+          isOpen={showHistory}
+          onClose={() => setShowHistory(false)}
+        />
+      )}
+
+      {/* Chat column */}
+      <div className="relative flex-1 min-w-0 h-full flex flex-col">
 
       {/* --- Top Chat Header --- */}
       <div className="h-14 bg-white border-b border-[#E2E8F0] px-4 flex items-center justify-between shrink-0 z-10">
         <div className="flex items-center gap-2.5 min-w-0">
+          {/* Top-left menu button: opens/collapses the history panel; swaps to
+              a left-panel icon on hover */}
           <Tooltip>
             <TooltipTrigger
-              render={
-                <Link
-                  to="/"
-                  className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#123047] to-[#087F8C] text-white flex items-center justify-center shrink-0 shadow-2xs hover:opacity-90 transition-opacity cursor-pointer"
-                />
-              }
+              onClick={() => setShowHistory((v) => !v)}
+              aria-expanded={showHistory}
+              className="group w-8 h-8 rounded-xl bg-gradient-to-br from-[#123047] to-[#087F8C] text-white flex items-center justify-center shrink-0 shadow-2xs hover:opacity-90 transition-opacity cursor-pointer"
+              aria-label="Toggle Consultation History"
             >
-              <FileSearch className="w-4 h-4" />
+              <Menu className="w-4 h-4 group-hover:hidden" />
+              <PanelLeftOpen className="w-4 h-4 hidden group-hover:block" />
             </TooltipTrigger>
-            <TooltipContent side="bottom">MediLens AI Home</TooltipContent>
+            <TooltipContent side="bottom">Toggle Consultation History</TooltipContent>
           </Tooltip>
           <div className="flex flex-col min-w-0">
             <span className="text-xs font-bold text-[#123047] truncate leading-tight">
@@ -209,43 +280,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <Tooltip>
-            <TooltipTrigger
-              onClick={toggleTheme}
-              className="p-1.5 rounded-lg border bg-white border-[#E2E8F0] text-slate-500 hover:text-[#123047] hover:bg-slate-50 transition-all cursor-pointer"
-              aria-label="Toggle color mode"
-            >
-              {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-[#087F8C]" />}
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {theme === 'dark' ? 'Switch to Clinical Light Mode' : 'Switch to Dark Mode'}
-            </TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger
-              onClick={() => setShowHistory(true)}
-              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                showHistory
-                  ? 'bg-[#DDF4F5] border-[#087F8C] text-[#087F8C]'
-                  : 'bg-white border-[#E2E8F0] text-slate-500 hover:text-[#123047] hover:bg-slate-50'
-              }`}
-              aria-label="Open Consultation History"
-            >
-              <History className="w-4 h-4" />
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Open Consultation History</TooltipContent>
-          </Tooltip>
-
-          <button
-            onClick={startNewChat}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#123047] text-white hover:bg-[#087F8C] transition-all shadow-2xs cursor-pointer"
-            title="Start New Chat"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">New Chat</span>
-          </button>
-
           {/* Export Report Dropdown */}
           <div className="relative" ref={exportMenuRef}>
             <button
@@ -264,16 +298,31 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     Export Clinical Report
                   </span>
                 </div>
+                {!canExport && (
+                  <div className="px-3 pb-1.5 text-[10px] text-slate-400 italic">
+                    Start a conversation first — there is no chat to export yet.
+                  </div>
+                )}
                 <button
                   onClick={handleExportPrintablePDF}
-                  className="w-full px-3 py-2 text-left flex items-center gap-2.5 hover:bg-[#F8FAFC] text-[#334155] cursor-pointer transition-colors font-medium"
+                  disabled={!canExport}
+                  className={`w-full px-3 py-2 text-left flex items-center gap-2.5 text-[#334155] transition-colors font-medium ${
+                    canExport
+                      ? 'hover:bg-[#F8FAFC] cursor-pointer'
+                      : 'opacity-40 cursor-not-allowed'
+                  }`}
                 >
                   <Printer className="w-4 h-4 text-[#087F8C]" />
                   <span>Printable PDF Report</span>
                 </button>
                 <button
                   onClick={handleExportMarkdown}
-                  className="w-full px-3 py-2 text-left flex items-center gap-2.5 hover:bg-[#F8FAFC] text-[#334155] cursor-pointer transition-colors font-medium"
+                  disabled={!canExport}
+                  className={`w-full px-3 py-2 text-left flex items-center gap-2.5 text-[#334155] transition-colors font-medium ${
+                    canExport
+                      ? 'hover:bg-[#F8FAFC] cursor-pointer'
+                      : 'opacity-40 cursor-not-allowed'
+                  }`}
                 >
                   <FileText className="w-4 h-4 text-[#087F8C]" />
                   <span>Markdown File (.md)</span>
@@ -301,10 +350,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
       </div>
 
-      {/* --- Centered Content Container when Right Panel is Collapsed --- */}
-      <div className={`flex-1 flex flex-col overflow-hidden ${isDocumentCollapsed ? 'max-w-3xl mx-auto w-full' : 'w-full'}`}>
-        {/* --- Message Stream Area --- */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth">
+      {/* --- Message Stream Area: the scroll container is full-width so its
+          scrollbar sits at the screen edge; the content centers itself while
+          the document panel is collapsed --- */}
+      <div
+        ref={scrollRef}
+        onScroll={handleScrollerScroll}
+        className="flex-1 overflow-y-auto scroll-smooth"
+      >
+        <div className={`p-4 sm:p-6 min-h-full flex flex-col ${isDocumentCollapsed ? 'max-w-3xl mx-auto w-full' : 'w-full'}`}>
           {isLoadingChat ? (
             /* Skeleton loader while a previous chat loads from the DB */
             <div className="space-y-6" aria-label="Loading conversation">
@@ -334,7 +388,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             </div>
           ) : messages.length === 0 ? (
             /* Empty Chat State */
-            <div className="h-full flex flex-col justify-center items-center text-center max-w-lg mx-auto py-8">
+            <div className="flex-1 flex flex-col justify-center items-center text-center max-w-lg mx-auto py-8">
               <div className="w-14 h-14 rounded-2xl bg-white border border-[#CBD5E1] shadow-xs flex items-center justify-center text-[#087F8C] mb-4">
                 <Stethoscope className="w-7 h-7" />
               </div>
@@ -370,21 +424,54 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               </div>
             </div>
           ) : (
-            /* Render Messages */
+            /* Render Messages — with a centered date chip whenever the day
+               changes (covers opened chats and next-day replies alike) */
             <div className="space-y-2">
-              {messages.map((msg) => (
-                <ChatMessage
-                  key={msg.id}
-                  message={msg}
-                  onSelectPrompt={(p) => handlePromptClick(p)}
-                />
-              ))}
+              {messages.map((msg, idx) => {
+                const prev = idx > 0 ? messages[idx - 1] : null;
+                const showDateChip =
+                  !prev || !isSameDay(new Date(prev.createdAt), new Date(msg.createdAt));
+                return (
+                  <React.Fragment key={msg.id}>
+                    {showDateChip && (
+                      <div className="flex justify-center my-4">
+                        <span className="px-3 py-1 rounded-full bg-white border border-[#E2E8F0] text-[10px] font-bold text-[#64748B] shadow-xs tracking-wide">
+                          {dayLabel(msg.createdAt)}
+                        </span>
+                      </div>
+                    )}
+                    <div data-message-id={msg.id}>
+                      <ChatMessage
+                        message={msg}
+                        onSelectPrompt={(p) => handlePromptClick(p)}
+                      />
+                    </div>
+                  </React.Fragment>
+                );
+              })}
             </div>
           )}
         </div>
+      </div>
 
-        {/* --- Composer at Bottom --- */}
+      {/* --- Composer at Bottom (centered with the content when collapsed) --- */}
+      <div className={`relative ${isDocumentCollapsed ? 'max-w-3xl mx-auto w-full shrink-0' : 'w-full shrink-0'}`}>
+        {/* Scroll-to-bottom pill — floats above the composer when the user has
+            scrolled up */}
+        {showScrollButton && (
+          <Tooltip>
+            <TooltipTrigger
+              onClick={scrollToBottom}
+              className="absolute -top-12 left-1/2 -translate-x-1/2 z-20 flex items-center justify-center w-10 h-10 rounded-full bg-white border border-[#CBD5E1] shadow-lg text-[#123047] hover:bg-[#DDF4F5] hover:border-[#087F8C] hover:text-[#087F8C] transition-all cursor-pointer"
+              aria-label="Scroll to bottom"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </TooltipTrigger>
+            <TooltipContent side="top">Scroll to latest messages</TooltipContent>
+          </Tooltip>
+        )}
         <ChatComposer isDocumentCollapsed={isDocumentCollapsed} />
+      </div>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { ChatMessage as ChatMessageType } from '../../types/chat.ts';
 import { MarkdownRenderer } from './MarkdownRenderer.tsx';
@@ -14,6 +14,55 @@ interface ChatMessageProps {
   onSelectPrompt?: (prompt: string) => void;
 }
 
+/**
+ * Paced reveal for streamed answers. Fast providers (e.g. Gemini flash-lite)
+ * can deliver an entire answer in ~300ms — faster than the eye can follow —
+ * so the streaming assistant message renders a progressively revealed prefix
+ * instead of the whole buffer at once. The store keeps accumulating the real
+ * deltas; this only smooths the DISPLAY. The reveal chases the arrived
+ * buffer (never more than ~1.5s behind) and finishes instantly on completion.
+ */
+function useStreamingReveal(content: string, active: boolean): string {
+  const [revealed, setRevealed] = useState(() =>
+    active ? Math.min(content.length, 80) : content.length
+  );
+  const revealedRef = useRef(revealed);
+  revealedRef.current = revealed;
+
+  useEffect(() => {
+    if (!active) {
+      setRevealed(content.length);
+      return;
+    }
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(120, now - last);
+      last = now;
+      const target = content.length;
+      const prev = revealedRef.current;
+      if (prev < target) {
+        const rate = Math.max(4, Math.ceil((target - prev) / 75)) * (dt / 16.7);
+        const next = Math.min(target, prev + Math.ceil(rate));
+        revealedRef.current = next;
+        setRevealed(next);
+        // Follow the newest revealed text while the user is near the bottom.
+        const scroller = document.querySelector('.scroll-smooth');
+        if (scroller) {
+          const nearBottom =
+            scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 140;
+          if (nearBottom) scroller.scrollTop = scroller.scrollHeight;
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [content, active]);
+
+  return content.slice(0, Math.min(revealed, content.length));
+}
+
 export const ChatMessage: React.FC<ChatMessageProps> = ({
   message,
   onSelectPrompt,
@@ -21,6 +70,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
   const isStreaming = message.status === 'streaming';
+  // Paced display of the streamed buffer (real data still arrives instantly).
+  const displayContent = useStreamingReveal(
+    message.content,
+    isStreaming && message.role === 'assistant'
+  );
 
   // Thinking phase: the query was sent and the answer stream has not produced
   // anything yet (no content, no citations attached).
@@ -96,7 +150,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
         {/* Rich Medical Markdown Content with Inline Citation Badges */}
         <div className="select-text">
           <MarkdownRenderer
-            content={message.content}
+            content={displayContent}
             citations={message.citations}
             isStreaming={isStreaming}
             scopeId={message.id}

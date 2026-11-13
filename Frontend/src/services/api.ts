@@ -28,6 +28,7 @@ export const API_CONFIG = {
       detail: (id: string) => `/chats/${id}`,
       update: (id: string) => `/chats/${id}`,
       delete: (id: string) => `/chats/${id}`,
+      stop: (id: string) => `/chats/${id}/stop`,
       stream: (id: string, token: string) =>
         `/chats/${id}/stream?token=${encodeURIComponent(token)}`,
     },

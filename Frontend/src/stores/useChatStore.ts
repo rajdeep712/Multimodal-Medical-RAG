@@ -22,7 +22,9 @@ interface ChatStoreState {
   selectedDocumentFilters: string[];
   dateRangeFilter: DateRangeFilter;
   sendMessage: (query: string) => void;
+  stopGeneration: () => void;
   toggleDocumentFilter: (docId: string) => void;
+  selectAllDocumentFilters: (docIds: string[]) => void;
   clearDocumentFilters: () => void;
   setDateRangeFilter: (filter: DateRangeFilter) => void;
   startNewChat: () => void;
@@ -110,6 +112,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setSelectedDocumentFilters((prev) =>
       prev.includes(docId) ? prev.filter((id) => id !== docId) : [...prev, docId]
     );
+  }, []);
+
+  const selectAllDocumentFilters = useCallback((docIds: string[]) => {
+    setSelectedDocumentFilters(docIds);
   }, []);
 
   const clearDocumentFilters = useCallback(() => {
@@ -250,6 +256,39 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [navigate, refreshConversations, selectedDocumentFilters, dateRangeFilter, updateMessage]
   );
 
+  // Stop button: abort the in-flight answer. Loading phase (nothing streamed
+  // yet) -> remove the assistant placeholder; streaming phase -> keep the
+  // partial content as a complete message. The backend is asked to cancel the
+  // retrieval / abort the LLM request; its generator persists the partial
+  // answer + citations either way.
+  const stopGeneration = useCallback(() => {
+    if (!isStreamingRef.current) return;
+    const convId = conversationRef.current?.id;
+    if (convId && convId.startsWith('ch-')) {
+      void chatService.stopStream(convId);
+    }
+    streamCloseRef.current?.();
+    streamCloseRef.current = null;
+    setConversation((prev) => {
+      if (!prev) return prev;
+      const msgs = [...prev.messages];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant' && msgs[i].status === 'streaming') {
+          if (msgs[i].content.trim()) {
+            msgs[i] = { ...msgs[i], status: 'complete' };
+          } else {
+            msgs.splice(i, 1);
+          }
+          break;
+        }
+      }
+      return { ...prev, messages: msgs };
+    });
+    setIsStreaming(false);
+    setIsThinking(false);
+    void refreshConversations();
+  }, [refreshConversations]);
+
   // Close any open stream when the provider unmounts.
   useEffect(() => {
     return () => {
@@ -320,7 +359,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         selectedDocumentFilters,
         dateRangeFilter,
         sendMessage,
+        stopGeneration,
         toggleDocumentFilter,
+        selectAllDocumentFilters,
         clearDocumentFilters,
         setDateRangeFilter,
         startNewChat,
