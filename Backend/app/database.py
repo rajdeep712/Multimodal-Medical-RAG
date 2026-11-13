@@ -72,6 +72,20 @@ async def init_db() -> None:
                 "ADD COLUMN IF NOT EXISTS content TEXT"
             )
         )
+        # FK columns do not get indexes automatically in Postgres — the chat
+        # history lookup and the persist-side join must be index scans.
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_messages_chat_history_id "
+                "ON messages (chat_history_id)"
+            )
+        )
+        await connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_message_citations_message_id "
+                "ON message_citations (message_id)"
+            )
+        )
 
     await _migrate_images_to_bytea()
 

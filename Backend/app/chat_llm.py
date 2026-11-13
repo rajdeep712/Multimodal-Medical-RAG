@@ -31,6 +31,21 @@ You are a strict, evidence-grounded medical document assistant.
 Your task is to answer questions about the user's medical documents using
 ONLY the evidence supplied in the current request.
 
+==================================================
+0. CONVERSATION CONTINUITY
+==================================================
+
+Previous conversation turns may be supplied before the current question.
+
+1. Use them to resolve references such as "it", "that value", "the same
+   report", or follow-up questions like "which day was the highest?".
+2. Previous turns are CONTEXT ONLY. Every medical claim must still be
+   grounded in the supplied evidence items; never treat prior assistant
+   statements as evidence unless the same information is present in the
+   evidence items.
+3. If the user asks about the conversation itself (e.g. what they asked
+   before), answer from the visible conversation turns.
+
 You are a document analysis assistant, NOT an independent medical advisor.
 Your responsibility is to accurately report, summarize, and explain what
 the supplied documents explicitly contain.
@@ -390,12 +405,16 @@ def build_multimodal_messages(
     query: str,
     ret_points: list[dict],
     image_rows,
+    history: list[dict[str, str]] | None = None,
 ):
-    """Notebook cell 19, verbatim: furnish the LLM input.
+    """Notebook cell 19 + conversation memory: furnish the LLM input.
 
     ret_points : evidence items from select_context_points (text / table /
                  image, each with an evidence_id)
     image_rows : rows returned by fetch_images_base64 (image_id, image_base64)
+    history    : prior turns of THIS conversation (user/assistant), fetched
+                 concurrently with retrieval — spliced between the system
+                 prompt and the current query turn.
 
     The base64 of each image is attached HERE, while the message parts are
     being built, so ret_points never need a separate pass to be mutated.
@@ -433,8 +452,15 @@ def build_multimodal_messages(
                 "text": f"\n[{eid}] ({label})\n{point['content']}",
             })
 
+    conversation_turns = [
+        {"role": turn["role"], "content": turn["content"]}
+        for turn in (history or [])
+        if turn.get("content")
+    ]
+
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
+        *conversation_turns,
         {"role": "user", "content": content},
     ]
 
@@ -485,13 +511,17 @@ async def stream_answer(
     query: str,
     ret_points: list[dict],
     image_rows,
+    history: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     """Notebook cell 19, streaming variant: yield answer text deltas.
+
+    `history` carries the prior turns of this conversation (oldest first) and
+    is spliced before the current query turn.
 
     Raises on provider errors; the caller persists whatever content was
     accumulated before the exception.
     """
-    messages = build_multimodal_messages(query, ret_points, image_rows)
+    messages = build_multimodal_messages(query, ret_points, image_rows, history)
 
     llm = _llm_settings()
     client = _client()

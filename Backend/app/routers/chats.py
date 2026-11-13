@@ -30,7 +30,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -106,6 +106,48 @@ async def close_biomedclip_http_client() -> None:
 # chat_id -> cancel event for an ACTIVE answer stream. The stop endpoint sets
 # it; the stream generator checks it at every cancellation point.
 _cancel_events: dict[str, asyncio.Event] = {}
+
+# One DB roundtrip that (a) appends the current user query to messages,
+# (b) bumps the chat's updated_at, and (c) returns the PRIOR history.
+# Postgres snapshot semantics exclude the just-inserted row from the SELECT,
+# so the returned history is exactly "everything before the current query".
+# Runs CONCURRENTLY with retrieval — zero sequential cost in the pipeline.
+_HISTORY_SQL = text(
+    """
+    WITH new_msg AS (
+        INSERT INTO messages (id, chat_history_id, role, content, created_at)
+        VALUES (:mid, :cid, 'User', :content, now())
+        RETURNING id
+    ), upd AS (
+        UPDATE chat_histories SET updated_at = now() WHERE id = :cid
+    )
+    SELECT role, content
+    FROM messages
+    WHERE chat_history_id = :cid
+    ORDER BY created_at ASC
+    """
+)
+
+
+async def fetch_history_with_query(
+    chat_id: str, user_message_id: str, query: str
+) -> list[dict[str, str]]:
+    """Prior conversation turns for the LLM prompt, with the current user
+    query appended in the same DB request. Best-effort: errors degrade to an
+    empty history rather than failing the stream."""
+    try:
+        async with SessionLocal() as session:
+            rows = (await session.execute(
+                _HISTORY_SQL,
+                {"mid": user_message_id, "cid": chat_id, "content": query},
+            )).all()
+        return [
+            {"role": "assistant" if role == "AI" else "user", "content": content}
+            for role, content in rows
+        ]
+    except Exception as exc:  # noqa: BLE001 — history is best-effort context
+        logger.warning("chat history fetch failed for %s: %s", chat_id, exc)
+        return []
 
 
 @router.post("/{chat_id}/stop", status_code=status.HTTP_200_OK)
@@ -191,17 +233,13 @@ async def create_chat_query(
             title=query[:60].strip() or "New Chat",
         )
         db.add(chat)
-        await db.flush()
+        await db.commit()  # the chat row must exist before the stream's history task runs
         chat_id = chat.id
 
-    user_message = Message(
-        id=f"msg-{chat_id[:5]}-{uuid.uuid4()}",
-        chat_history_id=chat_id,
-        role="User",
-        content=query,
-    )
-    db.add(user_message)
-    await db.commit()
+    # The user query row itself is NOT inserted here — the stream's concurrent
+    # history task appends it in the same DB request that fetches the prior
+    # history (single roundtrip, runs parallel to retrieval).
+    user_message_id = f"msg-{chat_id[:5]}-{uuid.uuid4()}"
 
     stream_token = uuid.uuid4().hex
     _prune_pending()
@@ -210,6 +248,7 @@ async def create_chat_query(
         "chat_id": chat_id,
         "user_id": str(user.id),
         "query": query,
+        "user_message_id": user_message_id,
         "doc_ids": payload.doc_ids or None,
         "ingestion_from": payload.ingestion_from,
         "ingestion_to": payload.ingestion_to,
@@ -218,7 +257,7 @@ async def create_chat_query(
 
     return {
         "chat_id": chat_id,
-        "message_id": user_message.id,
+        "message_id": user_message_id,
         "stream_token": stream_token,
         "is_new_chat": is_new_chat,
     }
@@ -303,6 +342,15 @@ async def stream_chat_answer(
             cancel_event = asyncio.Event()
             _cancel_events[chat_id] = cancel_event
 
+            # Conversation history: appended in the same DB request that reads
+            # the prior history, running CONCURRENTLY with retrieval — zero
+            # sequential cost before the LLM call.
+            history_task = asyncio.create_task(
+                fetch_history_with_query(
+                    chat_id, job.get("user_message_id"), job["query"]
+                )
+            )
+
             def _cancelled() -> bool:
                 return cancel_event.is_set()
 
@@ -356,9 +404,13 @@ async def stream_chat_answer(
                     point["evidence_id"]: point.get("content") for point in ret_points
                 }
 
+                # Retrieval is done — the history task has had the whole
+                # retrieval window to finish; awaiting it adds ~0ms.
+                history = await history_task
+
                 # LLM stream with a deterministic abort: closing the generator
                 # closes the underlying provider HTTP connection midway.
-                llm_gen = _stream_answer(job["query"], ret_points, image_rows)
+                llm_gen = _stream_answer(job["query"], ret_points, image_rows, history)
                 stopped_midway = False
                 try:
                     async for delta in llm_gen:
@@ -442,6 +494,7 @@ async def stream_chat_answer(
             }
         finally:
             _cancel_events.pop(chat_id, None)
+            history_task.cancel()
             # Partial answer (client disconnected mid-stream): schedule the
             # persistence as a detached task — awaiting inside the finally of
             # a closing async generator would silently fail.
@@ -457,10 +510,15 @@ async def stream_chat_answer(
     return event_response
 
 
-async def _stream_answer(query: str, ret_points: list[dict], image_rows):
+async def _stream_answer(
+    query: str,
+    ret_points: list[dict],
+    image_rows,
+    history: list[dict[str, str]] | None = None,
+):
     from ..chat_llm import stream_answer as llm_stream_answer
 
-    async for delta in llm_stream_answer(query, ret_points, image_rows):
+    async for delta in llm_stream_answer(query, ret_points, image_rows, history):
         yield delta
 
 
