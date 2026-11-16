@@ -8,14 +8,15 @@ import { evictDocumentContent } from '../../services/documentContentCache.ts';
 import { ApiError } from '../../services/api.ts';
 import { DocumentToolbar } from './DocumentToolbar.tsx';
 import { PdfDocumentPage } from './PdfDocumentPage.tsx';
+import { AnimateIcon } from '@animate-ui/react/icons';
+import { RefreshCwIcon } from '../animate-ui/icons/refresh-cw';
+import { UploadIcon } from '../animate-ui/icons/upload';
 import {
   AlertCircle,
   CloudDownload,
   FileSearch,
   Loader2,
-  RefreshCw,
   ShieldCheck,
-  Upload,
 } from 'lucide-react';
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -181,13 +182,15 @@ export const DocumentViewer: React.FC = () => {
             <CloudDownload className="w-4 h-4" />
             <span>Load from S3</span>
           </button>
-          <button
-            onClick={() => setUploadModalOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold border border-[#CBD5E1] bg-white text-[#475569] hover:bg-slate-50 transition-all cursor-pointer"
-          >
-            <Upload className="w-4 h-4" />
-            <span>Upload Another</span>
-          </button>
+          <AnimateIcon animateOnHover asChild>
+            <button
+              onClick={() => setUploadModalOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold border border-[#CBD5E1] bg-white text-[#475569] hover:bg-slate-50 transition-all cursor-pointer"
+            >
+              <UploadIcon size={16} />
+              <span>Upload Another</span>
+            </button>
+          </AnimateIcon>
         </div>
       </div>
     );
@@ -217,13 +220,15 @@ export const DocumentViewer: React.FC = () => {
             ? 'Choose a document from the dropdown above to verify, decrypt, and load its PDF from S3.'
             : 'Upload a PDF, PNG, or JPEG medical report to encrypt it and load it from S3.'}
         </p>
-        <button
-          onClick={() => setUploadModalOpen(true)}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-[#087F8C] text-white hover:bg-[#066570] transition-all shadow-sm cursor-pointer"
-        >
-          <Upload className="w-4 h-4" />
-          <span>Upload Document</span>
-        </button>
+        <AnimateIcon animateOnHover asChild>
+          <button
+            onClick={() => setUploadModalOpen(true)}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-[#087F8C] text-white hover:bg-[#066570] transition-all shadow-sm cursor-pointer"
+          >
+            <UploadIcon size={16} />
+            <span>Upload Document</span>
+          </button>
+        </AnimateIcon>
       </div>
     );
   }
@@ -238,16 +243,18 @@ export const DocumentViewer: React.FC = () => {
         </div>
         <h3 className="text-lg font-bold text-[#123047] mb-2">Could not open document</h3>
         <p className="text-xs sm:text-sm text-[#64748B] max-w-md mb-6 leading-relaxed">{loadError}</p>
-        <button
-          onClick={() => {
-            evictDocumentContent(selectedDocument.id);
-            setRetryKey((key) => key + 1);
-          }}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-[#087F8C] text-white hover:bg-[#066570] transition-all shadow-sm cursor-pointer"
-        >
-          <RefreshCw className="w-4 h-4" />
-          <span>Retry from S3</span>
-        </button>
+        <AnimateIcon animateOnHover asChild>
+          <button
+            onClick={() => {
+              evictDocumentContent(selectedDocument.id);
+              setRetryKey((key) => key + 1);
+            }}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-[#087F8C] text-white hover:bg-[#066570] transition-all shadow-sm cursor-pointer"
+          >
+            <RefreshCwIcon size={16} />
+            <span>Retry from S3</span>
+          </button>
+        </AnimateIcon>
       </div>
     );
   }

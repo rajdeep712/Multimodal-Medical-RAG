@@ -18,6 +18,12 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { AnimatePresence, motion } from 'motion/react';
+import {
+  ReducedMotionConfig,
+  spring,
+  transition,
+  useTempoTransition,
+} from '@animate-ui/react/utils/motion';
 import { useChatStore } from '../../stores/useChatStore.ts';
 import { ChatConversation } from '../../types/chat.ts';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
@@ -62,7 +68,6 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
   const [renameValue, setRenameValue] = useState('');
   const [renameSavingId, setRenameSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
 
   const sidebarRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -77,6 +82,11 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
     document.addEventListener('mousedown', handleOutsideClick);
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
+
+  // List motion tokens (Animate UI): reflow closes the gap when a row
+  // slides out, fade covers the exits; reduced motion drops the movement.
+  const move = useTempoTransition(spring.reflow);
+  const fadeOut = useTempoTransition(transition.fade);
 
   const filteredConversations = conversations.filter((c) =>
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
@@ -169,22 +179,30 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
           </div>
         </div>
 
-        {/* Conversation List */}
-        <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
+        {/* Conversation List — AnimatePresence slides deleted/renamed rows */}
+        <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-0.5">
+          <ReducedMotionConfig>
           {filteredConversations.length === 0 ? (
             <div className="p-6 text-center text-slate-400 text-xs">
               No conversations found.
             </div>
           ) : (
-            filteredConversations.map((conv) => {
+            <AnimatePresence initial={false} mode="popLayout">
+              {filteredConversations.map((conv) => {
               const isActive = conversation?.id === conv.id;
               const isRenaming = renamingId === conv.id;
               const isDeleting = deletingId === conv.id;
 
               return (
-                <div
+                <motion.div
                   key={conv.id}
-                  className={`group relative rounded-lg px-3 py-2.5 transition-all flex items-center gap-2 cursor-pointer ${
+                  data-conv-row
+                  layout="position"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0, transition: move }}
+                  exit={{ opacity: 0, x: -60, transition: fadeOut }}
+                  transition={move}
+                  className={`group relative rounded-lg px-3 py-2.5 flex items-center gap-2 cursor-pointer ${
                     isActive
                       ? 'bg-[#DDF4F5] border border-[#087F8C]/40 text-[#123047] font-semibold shadow-2xs'
                       : 'hover:bg-[#F8FAFC] border border-transparent text-[#334155]'
@@ -307,40 +325,35 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
                                 Delete this conversation? Its messages and
                                 citations will be removed too.
                               </p>
-                              {deletePendingId === conv.id ? (
-                                <div
-                                  className="flex items-center gap-1.5 pt-1 text-[10px] font-bold text-red-600"
-                                  role="status"
+                              <div className="flex items-center gap-1 pt-1">
+                                <button
+                                  onClick={(e) => {
+                                    // Optimistic: the row slides out
+                                    // immediately; the API runs behind it.
+                                    const row = (e.currentTarget as HTMLElement).closest(
+                                      '[data-conv-row]'
+                                    ) as HTMLElement | null;
+                                    if (row) {
+                                      const next = (row.nextElementSibling ??
+                                        row.previousElementSibling) as HTMLElement | null;
+                                      if (row.contains(document.activeElement))
+                                        (next?.querySelector('button, a, input') as HTMLElement | null)?.focus();
+                                      row.inert = true;
+                                    }
+                                    void deleteConversation(conv.id);
+                                    setActiveMenuId(null);
+                                  }}
+                                  className="px-2 py-0.5 rounded bg-red-600 text-white font-bold text-[10px] hover:bg-red-700 cursor-pointer"
                                 >
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                  <span>Deleting chat…</span>
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-1 pt-1">
-                                  <button
-                                    onClick={async () => {
-                                      if (deletePendingId) return;
-                                      setDeletePendingId(conv.id);
-                                      try {
-                                        await deleteConversation(conv.id);
-                                      } finally {
-                                        setDeletePendingId(null);
-                                      }
-                                      setDeletingId(null);
-                                      setActiveMenuId(null);
-                                    }}
-                                    className="px-2 py-0.5 rounded bg-red-600 text-white font-bold text-[10px] hover:bg-red-700 cursor-pointer"
-                                  >
-                                    Delete
-                                  </button>
-                                  <button
-                                    onClick={() => setDeletingId(null)}
-                                    className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] hover:bg-slate-200 cursor-pointer"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              )}
+                                  Delete
+                                </button>
+                                <button
+                                  onClick={() => setDeletingId(null)}
+                                  className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] hover:bg-slate-200 cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
                             </div>
                           ) : (
                             <button
@@ -354,10 +367,12 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
                         </div>
                       )}
                   </div>
-                </div>
-              );
-            })
+                  </motion.div>
+                );
+              })}
+            </AnimatePresence>
           )}
+          </ReducedMotionConfig>
         </div>
 
       {/* Footer info */}

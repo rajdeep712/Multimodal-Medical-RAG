@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Send,
   Square,
   Paperclip,
   Filter,
@@ -10,9 +9,11 @@ import {
   ChevronDown,
   Layers,
   FileText,
-  Mic,
   MicOff,
 } from 'lucide-react';
+import { AnimateIcon } from '@animate-ui/react/icons';
+import { SendIcon } from '../animate-ui/icons/send';
+import { MicIcon } from '../animate-ui/icons/mic';
 import { VoiceBeam, useMicrophone } from 'voice-glow';
 import type { DateRange } from 'react-day-picker';
 import { addDays, format, parseISO, startOfDay } from 'date-fns';
@@ -523,7 +524,13 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ isDocumentCollapsed 
                 }`}
                 aria-label="Dictate clinical query with voice"
               >
-                {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                {isListening ? (
+                  <MicOff className="w-4 h-4" />
+                ) : (
+                  <AnimateIcon animateOnHover asChild>
+                    <MicIcon size={16} />
+                  </AnimateIcon>
+                )}
               </TooltipTrigger>
               <TooltipContent side="top">
                 {isListening ? 'Listening... Click to stop dictation' : 'Dictate clinical query with voice'}
@@ -547,15 +554,17 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ isDocumentCollapsed 
             ) : (
               <Tooltip>
                 <TooltipTrigger render={<span className="relative z-[5] inline-flex shrink-0 rounded-xl" />}>
-                  <button
-                    type="button"
-                    onClick={handleSend}
-                    disabled={!input.trim()}
-                    className="p-2 rounded-xl bg-[#087F8C] text-white hover:bg-[#066570] disabled:opacity-40 disabled:hover:bg-[#087F8C] disabled:pointer-events-none transition-all shrink-0 shadow-xs active:scale-95 cursor-pointer disabled:cursor-not-allowed"
-                    aria-label={!input.trim() ? "Type a medical question to send" : "Send medical query"}
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
+                  <AnimateIcon animateOnHover asChild>
+                    <button
+                      type="button"
+                      onClick={handleSend}
+                      disabled={!input.trim()}
+                      className="p-2 rounded-xl bg-[#087F8C] text-white hover:bg-[#066570] disabled:opacity-40 disabled:hover:bg-[#087F8C] disabled:pointer-events-none transition-all shrink-0 shadow-xs active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+                      aria-label={!input.trim() ? "Type a medical question to send" : "Send medical query"}
+                    >
+                      <SendIcon size={16} />
+                    </button>
+                  </AnimateIcon>
                 </TooltipTrigger>
                 <TooltipContent side="top">
                   {!input.trim() ? 'Type a medical question to send' : 'Send medical query (Enter)'}

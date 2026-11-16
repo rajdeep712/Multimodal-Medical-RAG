@@ -5,9 +5,10 @@ import { MarkdownRenderer } from './MarkdownRenderer.tsx';
 import { SourcesPanel } from './SourcesPanel.tsx';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 import {
-  Copy,
   Check,
 } from 'lucide-react';
+import { AnimateIcon } from '@animate-ui/react/icons';
+import { CopyIcon } from '../animate-ui/icons/copy';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -140,7 +141,13 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 className="p-1.5 rounded-lg bg-white border border-[#E2E8F0] shadow-sm hover:bg-slate-50 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                 aria-label="Copy response"
               >
-                {copied ? <Check className="w-3.5 h-3.5 text-[#16A34A]" /> : <Copy className="w-3.5 h-3.5" />}
+                {copied ? (
+                  <Check className="w-3.5 h-3.5 text-[#16A34A]" />
+                ) : (
+                  <AnimateIcon animateOnHover asChild>
+                    <CopyIcon size={14} />
+                  </AnimateIcon>
+                )}
               </TooltipTrigger>
               <TooltipContent side="bottom">{copied ? 'Copied' : 'Copy response'}</TooltipContent>
             </Tooltip>

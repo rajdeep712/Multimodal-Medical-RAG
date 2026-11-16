@@ -280,18 +280,25 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
     setCurrentPageState(page);
   }, []);
 
+  // Optimistic delete: the dropdown's AnimatePresence slides the row out
+  // immediately; the API runs in the background and the list is re-synced
+  // from the server if the delete fails.
   const deleteDocument = useCallback(async (id: string) => {
-    const success = await documentService.deleteDocument(id);
-    if (success) {
-      const wasSelected = selectedDocumentIdRef.current === id;
-      evictDocumentContent(id);
-      setDocuments((prev) => prev.filter((d) => d.id !== id));
-      setSelectedDocument((prev) => (prev?.id === id ? null : prev));
-      setPendingDocumentState((prev) => (prev?.id === id ? null : prev));
-      if (wasSelected) setCurrentPageState(1);
+    const wasSelected = selectedDocumentIdRef.current === id;
+    evictDocumentContent(id);
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+    setSelectedDocument((prev) => (prev?.id === id ? null : prev));
+    setPendingDocumentState((prev) => (prev?.id === id ? null : prev));
+    if (wasSelected) setCurrentPageState(1);
+    try {
+      const success = await documentService.deleteDocument(id);
+      if (!success) throw new Error('delete failed');
+      return true;
+    } catch (err) {
+      await refreshDocuments(); // restores the list incl. the deleted doc
+      throw err;
     }
-    return success;
-  }, []);
+  }, [refreshDocuments]);
 
   const fitWidth = useCallback(() => {
     setZoomLevel(115);

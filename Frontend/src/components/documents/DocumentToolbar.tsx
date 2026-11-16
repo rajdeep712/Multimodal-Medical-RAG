@@ -5,9 +5,11 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
-  Download,
   RotateCw,
 } from 'lucide-react';
+import { AnimateIcon } from '@animate-ui/react/icons';
+import { DownloadIcon } from '../animate-ui/icons/download';
+import { RotateCwIcon } from '../animate-ui/icons/rotate-cw';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
 import { documentService } from '../../services/documentService.ts';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
@@ -159,7 +161,9 @@ export const DocumentToolbar: React.FC = () => {
             className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#123047] transition-colors cursor-pointer"
             aria-label="Rotate Page"
           >
-            <RotateCw className="w-3.5 h-3.5" />
+            <AnimateIcon animateOnHover asChild>
+              <RotateCwIcon size={14} />
+            </AnimateIcon>
           </TooltipTrigger>
           <TooltipContent side="bottom">{`Rotate Page (Currently ${rotation}°)`}</TooltipContent>
         </Tooltip>
@@ -170,7 +174,9 @@ export const DocumentToolbar: React.FC = () => {
             className="p-1 rounded-lg hover:bg-white text-slate-600 hover:text-[#087F8C] transition-colors cursor-pointer"
             aria-label="Download Medical Record"
           >
-            <Download className="w-3.5 h-3.5" />
+            <AnimateIcon animateOnHover asChild>
+              <DownloadIcon size={14} />
+            </AnimateIcon>
           </TooltipTrigger>
           <TooltipContent side="bottom">Download Medical Record</TooltipContent>
         </Tooltip>

@@ -3,7 +3,6 @@ import {
   FileText,
   Search,
   Upload,
-  Trash2,
   ChevronDown,
   Check,
   CheckCircle2,
@@ -15,6 +14,15 @@ import {
   AlertTriangle,
   Loader2,
 } from 'lucide-react';
+import { AnimateIcon } from '@animate-ui/react/icons';
+import { Trash2Icon } from '../animate-ui/icons/trash-2';
+import { AnimatePresence, motion } from 'motion/react';
+import {
+  ReducedMotionConfig,
+  spring,
+  transition,
+  useTempoTransition,
+} from '@animate-ui/react/utils/motion';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
 import { MedicalDocument } from '../../types/document.ts';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
@@ -45,6 +53,11 @@ export const DocumentSelector: React.FC = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // List motion tokens (Animate UI): reflow closes the gap when a row
+  // slides out; reduced motion drops the slide and keeps the fade.
+  const move = useTempoTransition(spring.reflow);
+  const fadeOut = useTempoTransition(transition.fade);
 
   const filteredDocs = documents.filter((doc) =>
     doc.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -130,14 +143,16 @@ export const DocumentSelector: React.FC = () => {
             </div>
           </div>
 
-          {/* Document List */}
-          <div className="max-h-72 overflow-y-auto px-2 py-1 space-y-1">
+          {/* Document List — AnimatePresence slides deleted rows out */}
+          <div className="max-h-72 overflow-y-auto px-2 py-1 flex flex-col gap-1">
+            <ReducedMotionConfig>
             {filteredDocs.length === 0 ? (
               <div className="py-6 text-center text-xs text-[#64748B]">
                 No documents match "{searchQuery}"
               </div>
             ) : (
-              filteredDocs.map((doc) => {
+              <AnimatePresence initial={false} mode="popLayout">
+              {filteredDocs.map((doc) => {
                 const isSelected = selectedDocument?.id === doc.id;
                 const isConfirming = confirmingDeleteId === doc.id;
                 const isDeleting = deletingId === doc.id;
@@ -149,15 +164,20 @@ export const DocumentSelector: React.FC = () => {
                 const isIngestionDone = doc.ingestionStatus === 'INDEXED';
 
                 return (
-                  <div
+                  <motion.div
                     key={doc.id}
-                    className={`group relative rounded-xl p-2.5 transition-all flex items-start justify-between gap-2 cursor-pointer ${
+                    layout="position"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0, transition: move }}
+                    exit={{ opacity: 0, x: -80, transition: fadeOut }}
+                    transition={move}
+                    className={`group relative rounded-xl p-2.5 flex items-start justify-between gap-2 cursor-pointer ${
                       isSelected
                         ? 'bg-[#DDF4F5]/60 border border-[#087F8C]/40 shadow-xs'
                         : 'hover:bg-[#F8FAFC] border border-transparent'
                     }`}
                     onClick={() => {
-                      if (deletingId) return;
+                      if (deletingId || isConfirming) return;
                       selectDocument(doc);
                       setIsOpen(false);
                     }}
@@ -218,35 +238,22 @@ export const DocumentSelector: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Delete action with confirmation */}
+                    {/* Delete action with confirmation — optimistic: the row
+                        slides out immediately, the API runs behind it */}
                     <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
-                      {isDeleting ? (
-                        <div
-                          className="flex items-center gap-1 text-[10px] font-bold text-red-600"
-                          role="status"
-                        >
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          <span>Deleting</span>
-                        </div>
-                      ) : isConfirming ? (
+                      {isConfirming ? (
                         <div className="flex items-center gap-1">
                           <button
-                            onClick={async () => {
-                              if (deletingId) return;
-                              setDeletingId(doc.id);
+                            onClick={() => {
                               setConfirmingDeleteId(null);
                               setDeleteError('');
-                              try {
-                                await deleteDocument(doc.id);
-                              } catch (error) {
+                              deleteDocument(doc.id).catch((error) => {
                                 setDeleteError(
                                   error instanceof Error
                                     ? error.message
                                     : 'Could not delete the document'
                                 );
-                              } finally {
-                                setDeletingId(null);
-                              }
+                              });
                             }}
                             className="text-[10px] bg-red-600 text-white font-bold px-2 py-1 rounded-md hover:bg-red-700 transition-colors cursor-pointer"
                           >
@@ -266,20 +273,23 @@ export const DocumentSelector: React.FC = () => {
                               setConfirmingDeleteId(doc.id);
                               setDeleteError('');
                             }}
-                            disabled={Boolean(deletingId)}
-                            className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                            className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all cursor-pointer"
                             aria-label="Delete document"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <AnimateIcon animateOnHover asChild>
+                              <Trash2Icon size={14} />
+                            </AnimateIcon>
                           </TooltipTrigger>
                           <TooltipContent side="top">Delete document</TooltipContent>
                         </Tooltip>
                       )}
                     </div>
-                  </div>
+                  </motion.div>
                 );
-              })
+              })}
+            </AnimatePresence>
             )}
+            </ReducedMotionConfig>
           </div>
 
           {deleteError && (

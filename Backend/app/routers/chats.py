@@ -133,14 +133,20 @@ async def fetch_history_with_query(
     chat_id: str, user_message_id: str, query: str
 ) -> list[dict[str, str]]:
     """Prior conversation turns for the LLM prompt, with the current user
-    query appended in the same DB request. Best-effort: errors degrade to an
-    empty history rather than failing the stream."""
+    query appended in the same DB request. Commits the user-message INSERT —
+    this task must always run to completion and never be cancelled.
+    Best-effort: errors degrade to an empty history rather than failing the
+    stream."""
     try:
         async with SessionLocal() as session:
             rows = (await session.execute(
                 _HISTORY_SQL,
                 {"mid": user_message_id, "cid": chat_id, "content": query},
             )).all()
+            # The INSERT inside the CTE lives in this transaction — without a
+            # commit it is rolled back on session close and the user message
+            # is silently lost.
+            await session.commit()
         return [
             {"role": "assistant" if role == "AI" else "user", "content": content}
             for role, content in rows
@@ -344,7 +350,8 @@ async def stream_chat_answer(
 
             # Conversation history: appended in the same DB request that reads
             # the prior history, running CONCURRENTLY with retrieval — zero
-            # sequential cost before the LLM call.
+            # sequential cost before the LLM call. The task also COMMITS the
+            # user message, so it must never be cancelled (see the finally).
             history_task = asyncio.create_task(
                 fetch_history_with_query(
                     chat_id, job.get("user_message_id"), job["query"]
@@ -494,7 +501,11 @@ async def stream_chat_answer(
             }
         finally:
             _cancel_events.pop(chat_id, None)
-            history_task.cancel()
+            # Do NOT cancel the history task: it owns the user-message INSERT
+            # and commits it at the end. Cancelling it before that commit (Stop
+            # button, client disconnect, retrieval error) silently loses the
+            # user message. It is self-contained — one DB roundtrip, all errors
+            # caught internally — so it always finishes on its own.
             # Partial answer (client disconnected mid-stream): schedule the
             # persistence as a detached task — awaiting inside the finally of
             # a closing async generator would silently fail.

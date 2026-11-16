@@ -1,7 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { useCitationStore } from '../../stores/useCitationStore.ts';
 import { calculateRenderedBox, RenderedBox } from '../../utils/coordinates.ts';
-import { Sparkles, X, BookmarkCheck } from 'lucide-react';
+import { Sparkles, X } from 'lucide-react';
+import { AnimateIcon } from '@animate-ui/react/icons';
+import { BookmarkCheckIcon } from '../animate-ui/icons/bookmark-check';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 
 interface CitationHighlightOverlayProps {
@@ -69,7 +71,9 @@ export const CitationHighlightOverlay: React.FC<CitationHighlightOverlayProps> =
             {/* Floating Source Tag (first box only) */}
             {showTag && (
               <div className="absolute -top-7 left-0 flex items-center gap-1.5 px-2 py-0.5 rounded-t-md bg-[#087F8C] text-white text-[10px] font-bold shadow-md tracking-wide">
-                <BookmarkCheck className="w-3 h-3 text-[#BDEFE7]" />
+                <AnimateIcon animateOnView asChild>
+                  <BookmarkCheckIcon size={12} className="text-[#BDEFE7]" />
+                </AnimateIcon>
                 <span className="truncate max-w-[200px]">
                   {box.label || activeCitation.excerpt?.slice(0, 32) || 'Evidence Source'}
                 </span>
