@@ -28,7 +28,9 @@ function useStreamingReveal(content: string, active: boolean): string {
     active ? Math.min(content.length, 80) : content.length
   );
   const revealedRef = useRef(revealed);
-  revealedRef.current = revealed;
+  // Delta-driven renders interleave with the rAF loop — never let the ref
+  // regress below the last flushed value (it would stall the reveal pacing).
+  revealedRef.current = Math.max(revealedRef.current, revealed);
 
   useEffect(() => {
     if (!active) {
@@ -37,6 +39,7 @@ function useStreamingReveal(content: string, active: boolean): string {
     }
     let raf = 0;
     let last = performance.now();
+    let lastFlush = 0;
     const tick = (now: number) => {
       const dt = Math.min(120, now - last);
       last = now;
@@ -46,9 +49,14 @@ function useStreamingReveal(content: string, active: boolean): string {
         const rate = Math.max(4, Math.ceil((target - prev) / 75)) * (dt / 16.7);
         const next = Math.min(target, prev + Math.ceil(rate));
         revealedRef.current = next;
-        setRevealed(next);
+        // Flush at ~25fps: each flush re-parses the whole message (markdown
+        // + KaTeX), and 60fps of that starves the main thread during streams.
+        if (now - lastFlush >= 40 || next >= target) {
+          lastFlush = now;
+          setRevealed(next);
+        }
         // Follow the newest revealed text while the user is near the bottom.
-        const scroller = document.querySelector('.scroll-smooth');
+        const scroller = document.querySelector('[data-chat-scroller]');
         if (scroller) {
           const nearBottom =
             scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 140;
@@ -64,7 +72,7 @@ function useStreamingReveal(content: string, active: boolean): string {
   return content.slice(0, Math.min(revealed, content.length));
 }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({
+const ChatMessageComponent: React.FC<ChatMessageProps> = ({
   message,
   onSelectPrompt,
 }) => {
@@ -195,3 +203,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     </div>
   );
 };
+
+// Memoized: per-delta store updates re-render the whole message list, and a
+// completed message (markdown + KaTeX parse included) must not re-render just
+// because a sibling is streaming. `message` objects are immutable per update,
+// so only the streaming message actually re-renders.
+export const ChatMessage = React.memo(ChatMessageComponent);

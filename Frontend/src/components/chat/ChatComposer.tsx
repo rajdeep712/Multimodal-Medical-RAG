@@ -17,7 +17,7 @@ import { MicIcon } from '../animate-ui/icons/mic';
 import { VoiceBeam, useMicrophone } from 'voice-glow';
 import type { DateRange } from 'react-day-picker';
 import { addDays, format, parseISO, startOfDay } from 'date-fns';
-import { useChatStore } from '../../stores/useChatStore.ts';
+import { useChatStore, useDocumentFilterSync } from '../../stores/useChatStore.ts';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 import { Calendar as CalendarPicker } from '../ui/calendar.tsx';
@@ -40,6 +40,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ isDocumentCollapsed 
   } = useChatStore();
 
   const { documents, setUploadModalOpen } = useDocumentStore();
+
+  // Restore the persisted RAG document scope, auto-select freshly ingested
+  // documents and mirror every change back to localStorage.
+  useDocumentFilterSync();
 
   const [input, setInput] = useState('');
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
@@ -106,9 +110,16 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ isDocumentCollapsed 
 
   const stopDictation = () => {
     shouldListenRef.current = false;
-    try {
-      recognitionRef.current?.stop();
-    } catch (e) {}
+    const recognition = recognitionRef.current;
+    if (recognition) {
+      try {
+        // Detach result handlers BEFORE stopping: a final result delivered
+        // after stop() must not repopulate the composer (e.g. right after
+        // the query was sent and the input cleared).
+        recognition.onresult = null;
+        recognition.stop();
+      } catch (e) {}
+    }
     recognitionRef.current = null;
     mic.stop();
     setIsListening(false);
@@ -249,6 +260,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({ isDocumentCollapsed 
 
   const handleSend = () => {
     if (!input.trim() || isStreaming) return;
+    // Sending the query closes the mic — the dictation session (recognition
+    // + VoiceBeam stream) must not keep running into the answer stream.
+    if (isListening) stopDictation();
     sendMessage(input.trim());
     setInput('');
     if (textareaRef.current) {

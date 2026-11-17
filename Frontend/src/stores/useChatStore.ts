@@ -12,6 +12,7 @@ import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import { ChatConversation, ChatMessage } from '../types/chat.ts';
 import { Citation } from '../types/document.ts';
 import { chatService, DateRangeFilter } from '../services/chatService.ts';
+import { useDocumentStore } from './useDocumentStore.ts';
 
 interface ChatStoreState {
   conversation: ChatConversation | null;
@@ -64,6 +65,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     isStreamingRef.current = isStreaming;
   }, [isStreaming]);
   const streamCloseRef = useRef<(() => void) | null>(null);
+  const deletingChatIdsRef = useRef<Set<string>>(new Set());
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -83,7 +85,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const chat = await chatService.getChat(id);
       if (chat) {
         setConversation(chat);
-        setSelectedDocumentFilters([]);
+        // The selected-document scope is the user's persistent choice
+        // (mirrored to localStorage) — opening an old chat keeps it.
         setDateRangeFilter({});
         return true;
       }
@@ -311,41 +314,56 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [navigate]
   );
 
+  // Optimistic delete: the sidebar's AnimatePresence slides the row out
+  // immediately; the API runs in the background and the list is re-synced
+  // from the server if the delete fails.
   const deleteConversation = useCallback(
     async (id: string) => {
+      if (deletingChatIdsRef.current.has(id)) return false;
+      deletingChatIdsRef.current.add(id);
+      const wasSelected = conversationRef.current?.id === id;
+      setConversations((prev) => prev.filter((conv) => conv.id !== id));
+      if (conversationRef.current?.id === id) {
+        setConversation(null);
+        navigate('/workspace', { replace: true });
+      }
       try {
         const success = await chatService.deleteChat(id);
-        if (success) {
-          setConversations((prev) => prev.filter((conv) => conv.id !== id));
-          if (conversationRef.current?.id === id) {
-            setConversation(null);
-            navigate('/workspace', { replace: true });
-          }
-        }
-        return success;
+        if (!success) throw new Error('delete failed');
+        return true;
       } catch (err) {
         console.error('Could not delete the chat:', err);
+        await refreshConversations();
         return false;
+      } finally {
+        deletingChatIdsRef.current.delete(id);
       }
     },
-    [navigate]
+    [navigate, refreshConversations]
   );
 
+  // Optimistic rename: the new title shows immediately; the old title is
+  // restored if the request fails.
   const renameConversation = useCallback(async (id: string, title: string) => {
+    const oldTitle = conversations.find((c) => c.id === id)?.title;
+    setConversations((prev) =>
+      prev.map((conv) => (conv.id === id ? { ...conv, title } : conv))
+    );
+    setConversation((prev) => (prev?.id === id ? { ...prev, title } : prev));
     try {
-      const success = await chatService.renameChat(id, title);
-      if (success) {
-        setConversations((prev) =>
-          prev.map((conv) => (conv.id === id ? { ...conv, title } : conv))
-        );
-        setConversation((prev) => (prev?.id === id ? { ...prev, title } : prev));
-      }
-      return success;
+      await chatService.renameChat(id, title);
+      return true;
     } catch (err) {
       console.error('Could not rename the chat:', err);
+      if (oldTitle !== undefined) {
+        setConversations((prev) =>
+          prev.map((conv) => (conv.id === id ? { ...conv, title: oldTitle } : conv))
+        );
+        setConversation((prev) => (prev?.id === id ? { ...prev, title: oldTitle } : prev));
+      }
       return false;
     }
-  }, []);
+  }, [conversations]);
 
   return React.createElement(
     ChatContext.Provider,
@@ -380,4 +398,97 @@ export function useChatStore() {
     throw new Error('useChatStore must be used within ChatProvider');
   }
   return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// Selected-document-filter persistence (localStorage)
+//
+// The RAG scope picked in the composer must survive refreshes: it is mirrored
+// to localStorage on every change and restored once the document list loads.
+// `known` records which documents existed at the last write, so documents
+// ingested afterwards (this session or after a refresh) are auto-selected;
+// with no stored state at all, every document starts selected.
+const DOC_FILTERS_STORAGE_KEY = 'medilens_selected_doc_filters';
+
+interface StoredDocFilters {
+  selected: string[];
+  known: string[];
+}
+
+function readStoredDocFilters(): StoredDocFilters | null {
+  try {
+    const raw = localStorage.getItem(DOC_FILTERS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredDocFilters> | null;
+    if (!parsed || !Array.isArray(parsed.selected) || !Array.isArray(parsed.known)) {
+      return null;
+    }
+    const asIds = (ids: unknown[]) =>
+      ids.filter((id): id is string => typeof id === 'string');
+    return { selected: asIds(parsed.selected), known: asIds(parsed.known) };
+  } catch {
+    return null; // corrupted/unreadable entry behaves like "not found"
+  }
+}
+
+function writeStoredDocFilters(state: StoredDocFilters): void {
+  try {
+    localStorage.setItem(DOC_FILTERS_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Storage unavailable/blocked: the selection just won't persist.
+  }
+}
+
+// Keep the persisted RAG document scope in sync with the document library.
+// Call once from a component mounted under both providers (ChatComposer).
+export function useDocumentFilterSync(): void {
+  const { selectedDocumentFilters, selectAllDocumentFilters } = useChatStore();
+  const { documents, isLoading: isLoadingDocuments } = useDocumentStore();
+
+  const initializedRef = useRef(false);
+  const knownIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    // Skip while a list fetch is in flight (the list is stale/empty then).
+    if (isLoadingDocuments) return;
+    const currentIds = documents.map((doc) => doc.id);
+    const currentIdSet = new Set(currentIds);
+
+    if (!initializedRef.current) {
+      // First sync after load: restore the stored selection (dropping ids of
+      // documents deleted meanwhile) and add anything ingested since the last
+      // write. Without stored state every document starts selected.
+      initializedRef.current = true;
+      const stored = readStoredDocFilters();
+      const restored = stored
+        ? stored.selected.filter((id) => currentIdSet.has(id))
+        : [];
+      const added = stored
+        ? currentIds.filter((id) => !new Set(stored.known).has(id))
+        : currentIds;
+      const next = [...new Set([...restored, ...added])];
+      knownIdsRef.current = new Set(currentIds);
+      selectAllDocumentFilters(next);
+      writeStoredDocFilters({ selected: next, known: currentIds });
+      return;
+    }
+
+    // Later syncs: newly ingested documents join the selection, deleted ones
+    // are pruned, and every change (including user toggles) is persisted.
+    const added = currentIds.filter((id) => !knownIdsRef.current.has(id));
+    const pruned = selectedDocumentFilters.filter((id) => currentIdSet.has(id));
+    knownIdsRef.current = new Set(currentIds);
+    const next = [...new Set([...pruned, ...added])];
+    const changed =
+      added.length > 0 || next.length !== selectedDocumentFilters.length;
+    if (changed) {
+      selectAllDocumentFilters(next);
+    }
+    writeStoredDocFilters({ selected: next, known: currentIds });
+  }, [
+    documents,
+    isLoadingDocuments,
+    selectedDocumentFilters,
+    selectAllDocumentFilters,
+  ]);
 }

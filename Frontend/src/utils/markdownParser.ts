@@ -5,12 +5,20 @@ export type InlineToken =
   | { type: 'bold'; text: string }
   | { type: 'italic'; text: string }
   | { type: 'code'; text: string }
+  | { type: 'math'; tex: string; displayMode: boolean }
   | { type: 'citation'; citationIndex: number; citation?: Citation }
   | { type: 'evidence-citation'; evidenceIds: string[] };
 
 
 export interface MarkdownBlock {
-  type: 'heading' | 'blockquote' | 'bullet-list' | 'ordered-list' | 'table' | 'paragraph';
+  type:
+    | 'heading'
+    | 'blockquote'
+    | 'bullet-list'
+    | 'ordered-list'
+    | 'table'
+    | 'math-block'
+    | 'paragraph';
   level?: number;
   content?: string;
   items?: string[];
@@ -56,15 +64,62 @@ export function beautifyScientificNotation(text: string): string {
 const CITE_MARKER_PATTERN = /\[\[cite:?\s*([^\]]+)\]\]/i;
 
 /**
- * Tokenizes inline text containing bold, italic, code, evidence citations
- * ([[cite:E1]] / [[cite E1, E4]]) and legacy numeric citations [1], [2].
+ * A single-$ span only counts as math when it carries a LaTeX-ish hint
+ * character (\, ^, _, {}) and is space-delimited on neither side — so
+ * currency like "$5 and $10" stays plain text while "$10^9/\mu\text{l}$"
+ * renders as a formula.
+ */
+const INLINE_MATH_HINT = /[\\^_{}]/;
+
+function isInlineMathContent(content: string): boolean {
+  if (!content) return false;
+  if (/\s$/.test(content)) return false; // "$5 and $" — space before closing $
+  if (/\\$/.test(content)) return false; // trailing "\" means an escaped $
+  return INLINE_MATH_HINT.test(content);
+}
+
+/** Math delimiters only — used to protect formulas from other transforms. */
+const MATH_SPAN_PATTERN =
+  /(\$\$[^$]+\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)(?:[^$\n]+?)\$)/g;
+
+/**
+ * Applies `transform` to the text outside math spans, leaving the math
+ * content itself untouched (KaTeX renders it — e.g. beautifying "10^9"
+ * to unicode superscripts inside a formula would corrupt it).
+ */
+export function beautifyOutsideMath(text: string): string {
+  const pattern = new RegExp(MATH_SPAN_PATTERN.source, 'g');
+  let result = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const isMath =
+      match[0].startsWith('$$') ||
+      match[0].startsWith('\\[') ||
+      match[0].startsWith('\\(') ||
+      isInlineMathContent(match[0].slice(1, -1));
+    if (!isMath) continue; // false-positive span stays in the plain chunk
+    result += beautifyScientificNotation(text.slice(lastIndex, match.index));
+    result += match[0];
+    lastIndex = pattern.lastIndex;
+  }
+  result += beautifyScientificNotation(text.slice(lastIndex));
+  return result;
+}
+
+/**
+ * Tokenizes inline text containing math ($...$ / $$...$$ / \(...\) / \[...\]),
+ * bold, italic, code, evidence citations ([[cite:E1]] / [[cite E1, E4]]) and
+ * legacy numeric citations [1], [2].
  */
 export function tokenizeInline(text: string, citations?: Citation[]): InlineToken[] {
   if (!text) return [];
 
-  // Match bold **text**, code `code`, evidence [[cite:...]], citation [1], italic *text*
+  // Math first so formulas win over bold/italic/code scanning; a code span
+  // still protects its content since `` ` `` alternative starts earlier.
   const pattern =
-    /(\*\*[^*]+\*\*|`[^`]+`|\[\[cite:?[^\]]*\]\]|\[\d+\]|\*[^*]+\*)/gi;
+    /(\$\$[^$]+\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)(?:[^$\n]+?)\$|\*\*[^*]+\*\*|`[^`]+`|\[\[cite:?[^\]]*\]\]|\[\d+\]|\*[^*]+\*)/gi;
   const tokens: InlineToken[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -81,7 +136,35 @@ export function tokenizeInline(text: string, citations?: Citation[]): InlineToke
       });
     }
 
-    if (matchedStr.toLowerCase().startsWith('[[cite')) {
+    if (matchedStr.startsWith('$$') && matchedStr.endsWith('$$')) {
+      tokens.push({
+        type: 'math',
+        tex: matchedStr.slice(2, -2).trim(),
+        displayMode: true,
+      });
+    } else if (matchedStr.startsWith('\\[') && matchedStr.endsWith('\\]')) {
+      tokens.push({
+        type: 'math',
+        tex: matchedStr.slice(2, -2).trim(),
+        displayMode: true,
+      });
+    } else if (matchedStr.startsWith('\\(') && matchedStr.endsWith('\\)')) {
+      tokens.push({
+        type: 'math',
+        tex: matchedStr.slice(2, -2).trim(),
+        displayMode: false,
+      });
+    } else if (
+      matchedStr.startsWith('$') &&
+      matchedStr.endsWith('$') &&
+      isInlineMathContent(matchedStr.slice(1, -1))
+    ) {
+      tokens.push({
+        type: 'math',
+        tex: matchedStr.slice(1, -1).trim(),
+        displayMode: false,
+      });
+    } else if (matchedStr.toLowerCase().startsWith('[[cite')) {
       // Evidence ids: [[cite:E1]] / [[cite E1, E4]] -> E1, E4
       const evidenceIds = CITE_MARKER_PATTERN.exec(matchedStr)?.[1]
         .split(',')
@@ -160,6 +243,43 @@ export function parseMarkdownBlocks(raw: string): MarkdownBlock[] {
         content: headingMatch[2].trim(),
       });
       i++;
+      continue;
+    }
+
+    // Display math ($$...$$) — single-line or spanning multiple lines
+    if (line.trim().startsWith('$$')) {
+      const trimmedLine = line.trim();
+      const inner = trimmedLine.slice(2);
+      const firstClose = inner.indexOf('$$');
+      if (firstClose >= 0) {
+        blocks.push({ type: 'math-block', content: inner.slice(0, firstClose).trim() });
+        i++;
+        continue;
+      }
+      const mathLines: string[] = [inner];
+      i++;
+      let closed = false;
+      while (i < lines.length) {
+        const closeIdx = lines[i].indexOf('$$');
+        if (closeIdx >= 0) {
+          mathLines.push(lines[i].slice(0, closeIdx));
+          i++;
+          closed = true;
+          break;
+        }
+        mathLines.push(lines[i]);
+        i++;
+      }
+      const tex = mathLines.join('\n').trim();
+      if (closed && tex) {
+        blocks.push({ type: 'math-block', content: tex });
+      } else {
+        // Unterminated (mid-stream) — keep the raw lines as a paragraph.
+        blocks.push({
+          type: 'paragraph',
+          content: [trimmedLine, ...mathLines.slice(1)].join('\n').trim(),
+        });
+      }
       continue;
     }
 

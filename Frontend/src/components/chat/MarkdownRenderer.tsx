@@ -3,11 +3,12 @@ import { Citation } from '../../types/document.ts';
 import {
   parseMarkdownBlocks,
   tokenizeInline,
-  beautifyScientificNotation,
+  beautifyOutsideMath,
   MarkdownBlock,
   InlineToken,
 } from '../../utils/markdownParser.ts';
 import { CitationBadge } from './CitationBadge.tsx';
+import { MathSpan } from './MathSpan.tsx';
 import { Info, AlertCircle, FileText, CheckCircle2 } from 'lucide-react';
 
 interface MarkdownRendererProps {
@@ -34,7 +35,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     );
   }
 
-  const blocks = parseMarkdownBlocks(beautifyScientificNotation(content));
+  const blocks = parseMarkdownBlocks(beautifyOutsideMath(content));
 
   // Occurrence counter per evidence id — blocks render in document order, so
   // each [[cite:E#]] badge gets a stable identity within this message.
@@ -47,13 +48,14 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         case 'bold':
           return (
             <strong key={idx} className="font-bold text-[#123047]">
-              {token.text}
+              {/* Re-tokenize so math inside bold (e.g. **$10^9/l$**) renders */}
+              {renderInline(token.text)}
             </strong>
           );
         case 'italic':
           return (
             <em key={idx} className="italic text-[#475569]">
-              {token.text}
+              {renderInline(token.text)}
             </em>
           );
         case 'code':
@@ -65,6 +67,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               {token.text}
             </code>
           );
+        case 'math':
+          return <MathSpan key={idx} tex={token.tex} displayMode={token.displayMode} />;
         case 'citation':
           return (
             <CitationBadge
@@ -154,6 +158,17 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                 <div className="flex-1 leading-relaxed">
                   {renderInline(block.content || '')}
                 </div>
+              </div>
+            );
+          }
+
+          case 'math-block': {
+            return (
+              <div
+                key={bIdx}
+                className="my-3 overflow-x-auto rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] px-3.5 py-2.5 text-sm"
+              >
+                <MathSpan tex={block.content || ''} displayMode />
               </div>
             );
           }

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { format, isSameDay, isToday, isYesterday } from 'date-fns';
 import {
   Menu,
@@ -210,9 +210,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   }, [conversation, isStreaming]);
 
-  const handlePromptClick = (prompt: string) => {
-    sendMessage(prompt);
-  };
+  // Stable identity — ChatMessage is memoized and must not re-render on every
+  // stream delta just because this callback was re-created.
+  const handlePromptClick = useCallback(
+    (prompt: string) => {
+      sendMessage(prompt);
+    },
+    [sendMessage]
+  );
 
   const messages = conversation?.messages || [];
 
@@ -356,7 +361,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       <div
         ref={scrollRef}
         onScroll={handleScrollerScroll}
-        className="flex-1 overflow-y-auto scroll-smooth"
+        data-chat-scroller
+        className="flex-1 overflow-y-auto"
       >
         <div className={`p-4 sm:p-6 min-h-full flex flex-col ${isDocumentCollapsed ? 'max-w-3xl mx-auto w-full' : 'w-full'}`}>
           {isLoadingChat ? (
@@ -441,10 +447,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                       </div>
                     )}
                     <div data-message-id={msg.id}>
-                      <ChatMessage
-                        message={msg}
-                        onSelectPrompt={(p) => handlePromptClick(p)}
-                      />
+                      <ChatMessage message={msg} onSelectPrompt={handlePromptClick} />
                     </div>
                   </React.Fragment>
                 );
