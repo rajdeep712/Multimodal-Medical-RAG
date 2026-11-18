@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 from io import BytesIO
 
 import img2pdf
@@ -30,7 +31,13 @@ def _build_tiny_pdf(temp_directory: str) -> str:
 
 def warm_unstructured() -> None:
     """Load the hi-res partition models with a tiny one-page PDF."""
+    started = time.perf_counter()
     logger.info("Warming up unstructured hi-res models...")
+    # A blank page exercises layout/OCR but may contain no detected tables,
+    # leaving the table transformer unloaded until the first real document.
+    from unstructured_inference.models.tables import load_agent
+
+    load_agent()
     with tempfile.TemporaryDirectory(prefix="medilens-warmup-") as temp_directory:
         pdf_path = _build_tiny_pdf(temp_directory)
         partition_pdf(
@@ -44,4 +51,4 @@ def warm_unstructured() -> None:
             combine_text_under_n_chars=2000,
             new_after_n_chars=6000,
         )
-    logger.info("unstructured warmup complete.")
+    logger.info("unstructured warmup complete in %.1fs; worker models are ready.", time.perf_counter() - started)

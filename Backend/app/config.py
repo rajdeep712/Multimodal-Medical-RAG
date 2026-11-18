@@ -67,10 +67,19 @@ class Settings(BaseSettings):
     biomedclip_images_batch_url: str = "http://127.0.0.1:8001/v1/embeddings/images/batch"
     biomedclip_text_url: str = "http://127.0.0.1:8001/v1/embeddings/text"
 
-    ingestion_batch_size: int = 3
-    image_ingestion_batch_size: int = 4
+    ingestion_batch_size: int = 10
+    image_ingestion_batch_size: int = 8
     image_analysis_concurrency: int = 5
     unstructured_warmup_enabled: bool = True
+
+    # Robustness knobs for multi-document batches: how many documents may be
+    # indexed at once (keep the worker's --concurrency in sync), how long one
+    # ingestion may run before it is cancelled and retried, and how long a
+    # SECURED/PROCESSING row may sit untouched before the startup sweep
+    # recovers it.
+    ingestion_max_parallel_docs: int = 3
+    ingestion_timeout_seconds: float = 900.0
+    stuck_ingestion_minutes: int = 30
 
     # Chat answer generation (OpenAI-compatible streaming; provider picked by LLM_PROVIDER).
     llm_provider: str = "GROQ"  # GROQ | XKIRO | GOOGLE

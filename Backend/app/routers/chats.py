@@ -403,7 +403,10 @@ async def stream_chat_answer(
                     return
 
                 ret_points, citations, images_to_fetch = select_context_points(points)
+                image_fetch_started = time.perf_counter()
+                logger.info("Chat latency chat_id=%s stage=image_fetch started images=%d", chat_id, len(images_to_fetch))
                 image_rows = await fetch_images_base64(images_to_fetch)
+                logger.info("Chat latency chat_id=%s stage=image_fetch seconds=%.3f", chat_id, time.perf_counter() - image_fetch_started)
                 if _cancelled():
                     _cancel_events.pop(chat_id, None)
                     return
@@ -411,9 +414,11 @@ async def stream_chat_answer(
                     point["evidence_id"]: point.get("content") for point in ret_points
                 }
 
-                # Retrieval is done — the history task has had the whole
-                # retrieval window to finish; awaiting it adds ~0ms.
+                # History usually finishes during retrieval, but can still
+                # delay the LLM if the database is slow.
+                history_wait_started = time.perf_counter()
                 history = await history_task
+                logger.info("Chat latency chat_id=%s stage=history_wait seconds=%.3f turns=%d", chat_id, time.perf_counter() - history_wait_started, len(history))
 
                 # LLM stream with a deterministic abort: closing the generator
                 # closes the underlying provider HTTP connection midway.

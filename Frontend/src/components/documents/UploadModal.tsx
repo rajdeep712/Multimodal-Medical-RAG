@@ -59,6 +59,9 @@ export const UploadModal: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const startedIds = useRef<Set<string>>(new Set());
+  // Multi-file batches: pendingDocument is a single slot and setPendingDocument
+  // yanks the document viewer — auto-open only when this is the ONLY upload.
+  const activeUploadsRef = useRef(0);
 
   const updateItem = useCallback((id: string, patch: Partial<UploadQueueItem>) => {
     setQueue((prev) => prev.map((q) => (q.id === id ? { ...q, ...patch } : q)));
@@ -68,6 +71,7 @@ export const UploadModal: React.FC = () => {
     async (item: UploadQueueItem) => {
       if (startedIds.current.has(item.id)) return;
       startedIds.current.add(item.id);
+      activeUploadsRef.current += 1;
 
       updateItem(item.id, { stage: 'uploading', progress: 0 });
       try {
@@ -83,10 +87,10 @@ export const UploadModal: React.FC = () => {
           (securedDoc) => {
             // The document is now in the workspace while indexing continues.
             void refreshDocuments();
-            setPendingDocument(securedDoc);
+            if (activeUploadsRef.current <= 1) setPendingDocument(securedDoc);
           }
         );
-        setPendingDocument(indexedDoc);
+        if (activeUploadsRef.current <= 1) setPendingDocument(indexedDoc);
         updateItem(item.id, { stage: 'indexed', progress: 100 });
       } catch (err: any) {
         updateItem(item.id, {
@@ -94,6 +98,8 @@ export const UploadModal: React.FC = () => {
           progress: 0,
           detail: err?.message || 'Upload failed',
         });
+      } finally {
+        activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
       }
     },
     [refreshDocuments, setPendingDocument, updateItem]

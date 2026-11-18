@@ -5,6 +5,7 @@ import { DocumentSelector } from '../documents/DocumentSelector.tsx';
 import { ProfileDropdown } from '../profile/ProfileDropdown.tsx';
 import { UploadModal } from '../documents/UploadModal.tsx';
 import { useCitationStore } from '../../stores/useCitationStore.ts';
+import { useChatStore } from '../../stores/useChatStore.ts';
 import { useDocumentStore } from '../../stores/useDocumentStore.ts';
 import {
   MessageSquare,
@@ -38,6 +39,15 @@ export const WorkspaceLayout: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const { activeCitation } = useCitationStore();
   const { selectedDocument } = useDocumentStore();
+  const { refreshConversations } = useChatStore();
+
+  // Load the consultation history alongside the document list when the
+  // authenticated workspace mounts (DocumentProvider fetches documents in the
+  // same commit). Fetching earlier, while ChatProvider sat above the login
+  // route, ran before auth cookies existed and never retried.
+  useEffect(() => {
+    void refreshConversations();
+  }, [refreshConversations]);
 
   // When a citation is clicked on mobile or small screens, automatically switch to document tab!
   useEffect(() => {

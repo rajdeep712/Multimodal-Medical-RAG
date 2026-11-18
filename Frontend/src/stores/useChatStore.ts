@@ -20,6 +20,7 @@ interface ChatStoreState {
   isStreaming: boolean;
   isThinking: boolean;
   isLoadingChat: boolean;
+  refreshConversations: () => Promise<void>;
   selectedDocumentFilters: string[];
   dateRangeFilter: DateRangeFilter;
   sendMessage: (query: string) => void;
@@ -75,10 +76,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       console.error('Could not load chat histories:', err);
     }
   }, []);
-
-  useEffect(() => {
-    void refreshConversations();
-  }, [refreshConversations]);
 
   const loadChatById = useCallback(async (id: string) => {
     try {
@@ -374,6 +371,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         isStreaming,
         isThinking,
         isLoadingChat,
+        refreshConversations,
         selectedDocumentFilters,
         dateRangeFilter,
         sendMessage,

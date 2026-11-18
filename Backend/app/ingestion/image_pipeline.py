@@ -2,12 +2,14 @@
 
 The image LLM is called ONCE per document through the notebook's parallel
 process_all (asyncio.gather + semaphore); the batched upload then reuses those
-results for filtering, embeddings and Qdrant upserts.
+results for filtering, embeddings and a single Qdrant upsert.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import logging
 from typing import Any
 
@@ -25,13 +27,59 @@ from .qdrant_store import QdrantStore, get_ingestion_timestamp, make_point_id
 
 logger = logging.getLogger(__name__)
 
-IMAGE_BATCH_SIZE = 4
+IMAGE_BATCH_SIZE = settings.image_ingestion_batch_size
 
 IMAGE_FALLBACK_RESULT = {
     "classification": "IRRELEVANT",
     "image_type": "OTHER",
     "summary": "",
 }
+
+# Images smaller than this are logos/decorations by definition — skipping them
+# avoids burning a vision-LLM call on each one.
+MIN_ANALYSIS_SIDE_PX = 64
+
+
+def downscale_image_base64(image_base64: str, max_side: int = 1024) -> str:
+    """Downscale a base64 image so its longest side is ~max_side (JPEG q85).
+
+    The vision LLM, BioMedCLIP and the DB rows all work at ≤1024-1600px, so
+    full-resolution payloads only cost bytes and latency. Undecodable input is
+    returned unchanged — downstream steps have their own fallbacks.
+    """
+    try:
+        from PIL import Image
+
+        raw = base64.b64decode(image_base64)
+        with Image.open(io.BytesIO(raw)) as img:
+            img = img.convert("RGB")
+            width, height = img.size
+            longest = max(width, height)
+            if longest <= max_side:
+                return image_base64
+            scale = max_side / longest
+            img = img.resize(
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                Image.LANCZOS,
+            )
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=85)
+            return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception as error:
+        logger.warning("Could not downscale an extracted image (%s); sending as-is", error)
+        return image_base64
+
+
+def _is_tiny_image(image_base64: str) -> bool:
+    """True when the image is smaller than MIN_ANALYSIS_SIDE_PX on any side."""
+    try:
+        from PIL import Image
+
+        raw = base64.b64decode(image_base64)
+        with Image.open(io.BytesIO(raw)) as img:
+            return img.width < MIN_ANALYSIS_SIDE_PX or img.height < MIN_ANALYSIS_SIDE_PX
+    except Exception:
+        return False
 
 
 def build_image_chain():
@@ -157,12 +205,19 @@ Ensure that the output is valid JSON and that all three fields are always presen
 async def process_all(chain, images: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Notebook cell 30: analyze all images in parallel under a semaphore.
 
-    A failing image falls back to IRRELEVANT instead of failing the whole
+    Tiny images (sub-64px logos/decorations) skip the LLM entirely, and a
+    failing image falls back to IRRELEVANT instead of failing the whole
     document (the sequential notebook cell 28 had the same per-image guard).
     """
     semaphore = asyncio.Semaphore(settings.image_analysis_concurrency)
 
-    async def analyze(image_base64):
+    async def analyze(image_base64: str):
+        if _is_tiny_image(image_base64):
+            logger.info(
+                "Skipping LLM analysis of a tiny image (%spx min side)",
+                MIN_ANALYSIS_SIDE_PX,
+            )
+            return dict(IMAGE_FALLBACK_RESULT)
         async with semaphore:
             try:
                 return await chain.ainvoke(image_base64)
@@ -208,7 +263,7 @@ async def upload_image_chunks(
 
     total_images = len(images)
     uploaded_count = 0
-    point_ids: list[str] = []
+    all_points: list[models.PointStruct] = []
     selected_images: list[dict[str, Any]] = []
 
     for start in range(0, total_images, image_batch_size):
@@ -336,29 +391,40 @@ async def upload_image_chunks(
 
             selected_images.append(item)
 
-        # 4. Upload this batch immediately
+        # 4. Accumulate — a single Qdrant upsert for the whole phase follows
+        # (one cloud round trip instead of one per batch; wait=True kept).
         if not points:
             continue
 
-        await store.upsert(points)
-
-        point_ids.extend(point.id for point in points)
-        uploaded_count += len(points)
+        all_points.extend(points)
+        uploaded_count = len(all_points)
 
         logfire.info(
-            "image batch upserted to Qdrant",
+            "image batch embedded",
             document_id=doc_id,
             uploaded=uploaded_count,
             total_images=total_images,
-            point_ids=[point.id for point in points],
             image_ids=[point.payload.get("image_id") for point in points],
         )
 
         logger.info(
-            "Uploaded %s/%s image chunks to Qdrant (document %s)",
+            "Embedded %s/%s image chunks (document %s)",
             uploaded_count, total_images, doc_id,
         )
 
+    # 5. Single upsert for the whole phase.
+    if all_points:
+        await store.upsert(all_points)
+
+    point_ids = [point.id for point in all_points]
+
+    logfire.info(
+        "image phase upserted to Qdrant",
+        document_id=doc_id,
+        uploaded=len(all_points),
+        total_images=total_images,
+        point_ids=point_ids,
+    )
     logger.info(
         "Successfully uploaded %s image chunks for document %s.",
         uploaded_count, doc_id,

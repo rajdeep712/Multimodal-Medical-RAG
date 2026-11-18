@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -13,6 +14,7 @@ from bs4 import BeautifulSoup
 from unstructured.partition.pdf import partition_pdf
 
 MAX_CHARS = 1800
+logger = logging.getLogger(__name__)
 
 
 def clean_text(text):
@@ -372,25 +374,53 @@ def _render_page_png_base64_sync(
     Used for HANDWRITING images: their DB rows store the whole page so the
     handwritten note is always shown with its full context.
     """
+    rendered = _render_pages_png_base64_sync(pdf_path, [page_number], max_side)
+    return rendered.get(page_number or 1)
+
+
+def _render_pages_png_base64_sync(
+    pdf_path: Path,
+    page_numbers: list[int | None],
+    max_side: float = 1600.0,
+) -> dict[int, str | None]:
+    """Render several PDF pages with ONE PyMuPDF open (keyed by page number).
+
+    Rendering per page re-opened and re-parsed the whole PDF each time; this
+    variant pays the parse once for all handwriting pages.
+    """
     import pymupdf
 
+    results: dict[int, str | None] = {}
     doc = pymupdf.open(str(pdf_path))
     try:
-        index = (page_number or 1) - 1
-        if index < 0 or index >= len(doc):
-            return None
-        page = doc[index]
-        rect = page.rect
-        zoom = max(1.0, min(2.5, max_side / max(rect.width, rect.height)))
-        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-        return base64.b64encode(pix.tobytes("png")).decode("ascii")
+        for page_number in page_numbers:
+            normalized = page_number or 1
+            index = normalized - 1
+            if index < 0 or index >= len(doc):
+                results[normalized] = None
+                continue
+            page = doc[index]
+            rect = page.rect
+            zoom = max(1.0, min(2.5, max_side / max(rect.width, rect.height)))
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+            results[normalized] = base64.b64encode(pix.tobytes("png")).decode("ascii")
     finally:
         doc.close()
+    return results
 
 
 async def render_page_base64(pdf_path: Path, page_number: int | None) -> str | None:
     """Async wrapper around the blocking PyMuPDF page render."""
     return await asyncio.to_thread(_render_page_png_base64_sync, pdf_path, page_number)
+
+
+async def render_pages_base64(
+    pdf_path: Path, page_numbers: list[int]
+) -> dict[int, str | None]:
+    """Async wrapper: render several pages in one blocking pass."""
+    return await asyncio.to_thread(
+        _render_pages_png_base64_sync, pdf_path, sorted(set(page_numbers))
+    )
 
 
 def _partition_document(pdf_path: Path):
@@ -411,9 +441,47 @@ def _partition_document(pdf_path: Path):
     )
 
 
-async def extract_content(pdf_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+def _image_only_pdf_fallback(pdf_path: Path) -> list[dict[str, Any]]:
+    """Recover the full image upload when Unstructured finds no elements."""
+    import pymupdf
+
+    with pymupdf.open(str(pdf_path)) as document:
+        if len(document) != 1:
+            raise ValueError("An image upload must contain exactly one PDF page")
+        page = document[0]
+        # Render the whole page, including its rotation, rather than relying
+        # on OCR/layout detection. Match the normal image pipeline's JPEG input.
+        scale = min(2.5, 1600.0 / max(page.rect.width, page.rect.height))
+        pixmap = page.get_pixmap(
+            matrix=pymupdf.Matrix(scale, scale), colorspace=pymupdf.csRGB, alpha=False,
+        )
+        return [{
+            "type": "Image",
+            # Stable across Celery retries; Qdrant IDs also include document ID.
+            "image_id": "page-1-image-fallback",
+            "base64Image": base64.b64encode(pixmap.tobytes("jpeg")).decode("ascii"),
+            "page_number": 1,
+            "file_name": pdf_path.name,
+            "coordinates": {
+                "points": [[0, 0], [0, pixmap.height],
+                           [pixmap.width, pixmap.height], [pixmap.width, 0]],
+                "system": "PixelSpace",
+                "layout_width": pixmap.width,
+                "layout_height": pixmap.height,
+            },
+            "last_modified": None,
+        }]
+
+
+async def extract_content(
+    pdf_path: Path, *, image_upload: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Run the blocking unstructured extraction in a worker thread."""
     chunks = await asyncio.to_thread(_partition_document, pdf_path)
+    if not chunks and image_upload:
+        logger.info("Unstructured returned no chunks for image upload %s; using the whole PDF page as an image", pdf_path.name)
+        images = await asyncio.to_thread(_image_only_pdf_fallback, pdf_path)
+        return [], [], images
     tables, texts = await asyncio.to_thread(split_content, chunks)
     images = get_images_base64(chunks)
     return tables, texts, images

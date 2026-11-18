@@ -6,6 +6,7 @@ gets its own event loop, SQLAlchemy engine and Redis client.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
@@ -13,6 +14,8 @@ from pathlib import Path
 import aiofiles
 import aiofiles.os
 import httpx
+from botocore.exceptions import ClientError
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .. import aws, events
@@ -22,15 +25,33 @@ from ..document_decryption import (
     verify_and_decrypt_document,
 )
 from ..models import Document
-from .content import extract_content, render_page_base64
+from .content import extract_content, render_pages_base64
 from .embeddings import build_embedding_model
-from .image_pipeline import build_image_chain, is_relevant_result, process_all, upload_image_chunks
+from .errors import TransientIngestionError
+from .image_pipeline import (
+    build_image_chain,
+    downscale_image_base64,
+    is_relevant_result,
+    process_all,
+    upload_image_chunks,
+)
 from .image_repository import replace_document_images
 from .pii import detect_pii_batch  # noqa: F401  (re-exported for tests)
 from .qdrant_store import QdrantStore
 from .text_pipeline import upload_table_chunks, upload_text_chunks
 
 logger = logging.getLogger(__name__)
+
+# Infrastructure failures where another attempt could plausibly succeed.
+# FileNotFoundError is excluded on purpose: a missing source file is permanent.
+TRANSIENT_EXCEPTIONS = (
+    httpx.HTTPError,
+    ConnectionError,
+    TimeoutError,
+    OSError,
+    ClientError,
+    OperationalError,
+)
 
 
 async def _resolve_pdf(document_id: str, user_id: str, s3_bucket: str, s3_prefix: str) -> tuple[Path, tempfile.TemporaryDirectory | None]:
@@ -60,25 +81,45 @@ async def _resolve_pdf(document_id: str, user_id: str, s3_bucket: str, s3_prefix
     return pdf_path, temporary_directory
 
 
-async def run_ingestion(document_id: str, user_id: str) -> str | None:
+async def run_ingestion(
+    document_id: str, user_id: str, retrying: bool = False
+) -> str | None:
     """Process one secured document and mark it INDEXED (or ERROR).
 
-    Returns the final status string for the Celery result backend.
+    ``retrying`` is True while another Celery attempt remains: transient
+    failures then raise TransientIngestionError (document stays PROCESSING,
+    Celery schedules the backoff) instead of marking ERROR. Returns the final
+    status string for the Celery result backend.
     """
     import logfire
 
-    with logfire.span(
-        "ingest_document",
-        _span_name="ingest_document",
-        document_id=document_id,
-        user_id=user_id,
-    ) as span:
-        status = await _run_ingestion_inner(document_id, user_id)
-        span.set_attribute("ingestion_result", status or "unknown")
-        return status
+    async def _traced() -> str | None:
+        with logfire.span(
+            "ingest_document",
+            _span_name="ingest_document",
+            document_id=document_id,
+            user_id=user_id,
+        ) as span:
+            status = await _run_ingestion_inner(document_id, user_id, retrying)
+            span.set_attribute("ingestion_result", status or "unknown")
+            return status
+
+    try:
+        # Watchdog: a hung embedding/Qdrant/PII call must not stall this
+        # document (and, with bounded worker concurrency, the queue behind
+        # it) forever. Timeouts count as transient → retried → then ERROR.
+        return await asyncio.wait_for(
+            _traced(), timeout=settings.ingestion_timeout_seconds
+        )
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        raise TransientIngestionError(
+            f"Ingestion timed out after {settings.ingestion_timeout_seconds:.0f}s"
+        ) from exc
 
 
-async def _run_ingestion_inner(document_id: str, user_id: str) -> str | None:
+async def _run_ingestion_inner(
+    document_id: str, user_id: str, retrying: bool = False
+) -> str | None:
     import logfire
 
     # Task-local engine/session factory: never reuse the FastAPI process pool
@@ -122,7 +163,9 @@ async def _run_ingestion_inner(document_id: str, user_id: str) -> str | None:
         )
         aws_initialized = aws.kms is not None
 
-        tables, texts, images = await extract_content(pdf_path)
+        tables, texts, images = await extract_content(
+            pdf_path, image_upload=doc.mime_type in {"image/png", "image/jpeg"},
+        )
         for item in (*tables, *texts, *images):
             item["file_name"] = original_filename
         logger.info(
@@ -138,53 +181,74 @@ async def _run_ingestion_inner(document_id: str, user_id: str) -> str | None:
             images=[{key: item.get(key) for key in ("image_id", "page_number", "file_name")} for item in images],
         )
 
-        chain = build_image_chain()
-        # All image LLM calls run once, in parallel (notebook process_all).
-        analysis_results = await process_all(chain, images)
-
-        # Trace every raw LLM decision so nothing about image handling is opaque.
-        for image_item, result in zip(images, analysis_results):
-            logfire.info(
-                "image LLM analysis result",
-                document_id=document_id,
-                image_id=image_item.get("image_id"),
-                page_number=image_item.get("page_number"),
-                classification=result.get("classification"),
-                image_type=result.get("image_type"),
-                summary=result.get("summary"),
-                selected_for_indexing=is_relevant_result(result),
+        # Downscale extracted images before any network hop: the vision LLM,
+        # BioMedCLIP and the DB rows all cap at ~1024-1600px anyway, so
+        # shipping full-resolution base64 only adds latency.
+        for image_item in images:
+            image_item["base64Image"] = downscale_image_base64(
+                image_item.get("base64Image") or ""
             )
 
+        chain = build_image_chain()
         embedding_model = build_embedding_model()
         await store.ensure_collection()
 
         async with httpx.AsyncClient(timeout=settings.pii_api_timeout_seconds) as pii_client, \
                 httpx.AsyncClient(timeout=180) as clip_client:
-            table_ids = await upload_table_chunks(
-                tables,
-                store=store,
-                embedding_model=embedding_model,
-                pii_client=pii_client,
-                doc_id=document_id,
-                user_id=user_id,
+            # Text/table embedding starts immediately and runs CONCURRENTLY
+            # with the image LLM analysis (they share nothing but the embedding
+            # client); the image upload follows analysis because it consumes
+            # its results. The finally-style awaits keep the client context
+            # open until every task finishes, even if analysis fails.
+            table_task = asyncio.create_task(
+                upload_table_chunks(
+                    tables,
+                    store=store,
+                    embedding_model=embedding_model,
+                    pii_client=pii_client,
+                    doc_id=document_id,
+                    user_id=user_id,
+                )
             )
-            text_ids = await upload_text_chunks(
-                texts,
-                store=store,
-                embedding_model=embedding_model,
-                pii_client=pii_client,
-                doc_id=document_id,
-                user_id=user_id,
+            text_task = asyncio.create_task(
+                upload_text_chunks(
+                    texts,
+                    store=store,
+                    embedding_model=embedding_model,
+                    pii_client=pii_client,
+                    doc_id=document_id,
+                    user_id=user_id,
+                )
             )
-            image_ids, selected_images = await upload_image_chunks(
-                images,
-                analysis_results,
-                store=store,
-                embedding_model=embedding_model,
-                clip_client=clip_client,
-                doc_id=document_id,
-                user_id=user_id,
-            )
+            try:
+                # All image LLM calls run once, in parallel (notebook process_all).
+                analysis_results = await process_all(chain, images)
+
+                # Trace every raw LLM decision so nothing about image handling is opaque.
+                for image_item, result in zip(images, analysis_results):
+                    logfire.info(
+                        "image LLM analysis result",
+                        document_id=document_id,
+                        image_id=image_item.get("image_id"),
+                        page_number=image_item.get("page_number"),
+                        classification=result.get("classification"),
+                        image_type=result.get("image_type"),
+                        summary=result.get("summary"),
+                        selected_for_indexing=is_relevant_result(result),
+                    )
+
+                image_ids, selected_images = await upload_image_chunks(
+                    images,
+                    analysis_results,
+                    store=store,
+                    embedding_model=embedding_model,
+                    clip_client=clip_client,
+                    doc_id=document_id,
+                    user_id=user_id,
+                )
+            finally:
+                table_ids = await table_task
+                text_ids = await text_task
 
         point_ids = [*table_ids, *text_ids, *image_ids]
 
@@ -199,15 +263,20 @@ async def _run_ingestion_inner(document_id: str, user_id: str) -> str | None:
             image.get("page_number") for image in handwriting_rows
         } - {None}
         page_base64_map: dict[int, str] = {}
-        for page_number in sorted(handwriting_page_numbers):
-            page_b64 = await render_page_base64(pdf_path, page_number)
-            if page_b64:
-                page_base64_map[page_number] = page_b64
-            else:
-                logger.warning(
-                    "Could not render page %s of %s; handwriting row keeps the cropped base64",
-                    page_number, document_id,
-                )
+        if handwriting_page_numbers:
+            # One PyMuPDF open renders every needed page (per-page opens
+            # re-parsed the whole PDF for each handwriting page).
+            rendered_pages = await render_pages_base64(
+                pdf_path, sorted(handwriting_page_numbers)
+            )
+            for page_number, page_b64 in rendered_pages.items():
+                if page_b64:
+                    page_base64_map[page_number] = page_b64
+                else:
+                    logger.warning(
+                        "Could not render page %s of %s; handwriting row keeps the cropped base64",
+                        page_number, document_id,
+                    )
         for image in handwriting_rows:
             page_b64 = page_base64_map.get(image.get("page_number"))
             if page_b64:
@@ -279,6 +348,21 @@ async def _run_ingestion_inner(document_id: str, user_id: str) -> str | None:
             logger.exception(
                 "Qdrant cleanup failed for document %s", document_id
             )
+
+        # Transient infrastructure failure with another Celery attempt left:
+        # leave the document PROCESSING and let the task's autoretry schedule
+        # the backoff. The final attempt falls through to the ERROR marking.
+        is_transient = isinstance(exc, TRANSIENT_EXCEPTIONS) and not isinstance(
+            exc, FileNotFoundError
+        )
+        if is_transient and retrying:
+            logger.warning(
+                "Transient ingestion failure for %s (attempt will be retried): %s",
+                document_id, exc,
+            )
+            raise TransientIngestionError(
+                str(exc) or exc.__class__.__name__
+            ) from exc
 
         try:
             async with session_factory() as session:
