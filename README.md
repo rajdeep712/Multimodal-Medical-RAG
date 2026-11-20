@@ -1,10 +1,18 @@
-# MediLens AI
+# MediLens AI — Secure Multimodal Search and Chat for Medical Documents
 
 [![Backend: FastAPI](https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&logoColor=white)](Backend)
 [![Frontend: React](https://img.shields.io/badge/frontend-React-087EA4?logo=react&logoColor=white)](Frontend)
 [![Worker: Celery](https://img.shields.io/badge/worker-Celery-37814A?logo=celery&logoColor=white)](Backend/app/celery_app.py)
-[![Vector search: Qdrant](https://img.shields.io/badge/vector%20search-Qdrant-B52658)](Backend/app/ingestion/qdrant_store.py)
-[![Storage: AWS S3 and KMS](https://img.shields.io/badge/storage-AWS%20S3%20%2B%20KMS-9A5200)](Backend/app/protection.py)
+[![Queue: Redis](https://img.shields.io/badge/queue-Redis-DC382D?logo=redis&logoColor=white)](Backend/app/celery_app.py)
+[![Database: PostgreSQL](https://img.shields.io/badge/database-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](Backend/app/database.py)
+[![Authentication: Auth0](https://img.shields.io/badge/auth-Auth0-EB5424?logo=auth0&logoColor=white)](Backend/app/auth0.py)
+
+[![Vector search: Qdrant Cloud](https://img.shields.io/badge/vector%20search-Qdrant%20Cloud-B52658)](Backend/app/ingestion/qdrant_store.py)
+[![Object storage: AWS S3](https://img.shields.io/badge/object%20storage-AWS%20S3-447A14)](Backend/app/aws.py)
+[![Key management: AWS KMS](https://img.shields.io/badge/keys%20%26%20signing-AWS%20KMS-9A5200)](Backend/app/protection.py)
+[![Document parsing: Unstructured](https://img.shields.io/badge/document%20parsing-Unstructured-6554C0)](Backend/app/ingestion/content.py)
+[![Text and image embeddings: MedEmbed and BioMedCLIP](https://img.shields.io/badge/embeddings-MedEmbed%20%2B%20BioMedCLIP-176B87)](#1-ingestion)
+[![Chat providers: Groq and Gemini](https://img.shields.io/badge/chat%20providers-Groq%20%2F%20Gemini-5C48B8)](Backend/app/chat_llm.py)
 
 ![Animated MediLens AI overview: a medical document is indexed, its evidence supports a cited answer, and the protected original can be verified and opened.](docs/readme/architecture.gif)
 
@@ -27,23 +35,9 @@ MediLens AI is a multimodal retrieval app for medical documents. Upload PDFs or 
 
 FastAPI validates the upload, hashes its bytes for duplicate detection within the account, and stages a local PDF (converting PNG or JPEG when needed). The API uploads the encrypted package before recording the secured document in PostgreSQL and sending its ID to Celery via Redis.
 
-```mermaid
-flowchart TD
-    Upload["Upload PDF, PNG, or JPEG"] --> Stage["Check size and format · SHA-256 · stage PDF"]
-    Stage --> Secure["Encrypt PDF · wrap AES key · sign manifest"]
-    Secure --> Package[("Private S3: ciphertext, manifest, signature")]
-    Package --> Record[("PostgreSQL: secured document and S3 reference")]
-    Record --> Queue["Redis queue → Celery worker"]
-    Queue --> Split["Unstructured: extract text, tables, and images"]
-    Split --> Text["Text: redact PII · embed with MedEmbed"]
-    Split --> Table["Tables: normalize rows · redact PII · embed with MedEmbed"]
-    Split --> Image["Images: analyze with a vision LLM · keep relevant results"]
-    Image --> Vectors["Embed summary with MedEmbed and image with BioMedCLIP"]
-    Vectors --> Assets[("Upload retained images to private S3")]
-    Text --> Index[("Qdrant: vectors and source metadata")]
-    Table --> Index
-    Assets -->|"Include S3 bucket and object key"| Index
-```
+![Ingestion: validate and encrypt uploads, queue extraction, and index text, tables, and images.](docs/readme/ingestion.svg)
+
+[Ingestion Mermaid source](docs/readme/ingestion.mmd)
 
 - **Text and tables:** MedEmbed Large v0.1 produces **1,024-dimensional** vectors. Table rows are normalized for embedding; HTML is kept for retrieval.
 - **Images:** The worker drops irrelevant results, handles single-page image-only PDFs when extraction returns no chunks, and uses full-page context for handwriting when available. Retained images get **512-dimensional** BioMedCLIP vectors and their summaries get MedEmbed vectors.
@@ -53,18 +47,9 @@ flowchart TD
 
 The query is embedded twice: MedEmbed searches the text space, and the BioMedCLIP text encoder searches the image space. Qdrant filters by owner and applicable document or date constraints, then merges the two rankings with reciprocal rank fusion.
 
-```mermaid
-flowchart TD
-    Query["Question and document filters"] --> Embed["Encode query: MedEmbed 1,024D + BioMedCLIP 512D"]
-    Embed --> Search["Qdrant: filtered search in both vector spaces · fuse rankings"]
-    Search --> Select["Select top 5 chunks, at most 2 images by default"]
-    Select -->|"Text and tables"| Context["Assemble evidence, prompt, and chat history"]
-    Select -->|"Image bucket and key"| Sign["Validate scope · sign S3 GET URLs for 5 minutes by default"]
-    Sign -->|"Pass URLs as image inputs"| Context
-    History[("PostgreSQL chat history")] --> Context
-    Context --> LLM["Multimodal LLM fetches selected images from S3"]
-    LLM --> Answer["Stream answer with clickable citations"]
-```
+![Inference: retrieve evidence, sign selected image URLs, and stream a cited answer.](docs/readme/inference.svg)
+
+[Inference Mermaid source](docs/readme/inference.mmd)
 
 Image signing happens after selection. The API sends temporary URLs to the model without reading image bytes from PostgreSQL, downloading the images itself, or converting them to Base64. The URLs are generated for the request and are not stored in Qdrant.
 
@@ -80,16 +65,9 @@ Image signing happens after selection. The API sends temporary URLs to the model
 | `manifest.json` | Document identity, encryption parameters, and ciphertext hash |
 | `signature.bin` | The detached signature over the manifest digest |
 
-```mermaid
-flowchart TD
-    Request["Authorized document request"] --> Fetch["Download the three S3 objects"]
-    Fetch --> Verify{"Owner, manifest signature, and ciphertext hash valid?"}
-    Verify -->|"Yes"| Unwrap["KMS unwraps the AES key"]
-    Unwrap --> Decrypt{"AES-GCM tag and PDF header valid?"}
-    Decrypt -->|"Yes"| Serve["Stream the verified PDF · clean up temporary files"]
-    Verify -->|"No"| Reject["Reject the package"]
-    Decrypt -->|"No"| Reject
-```
+![Decryption: verify the package, unwrap the AES key, and stream the authenticated PDF.](docs/readme/decryption.svg)
+
+[Decryption Mermaid source](docs/readme/decryption.mmd)
 
 This protects the stored source PDF. The server decrypts it for authorized viewing and may use a local plaintext copy for ingestion. Retrieved evidence can also reach the configured model providers. The current PII client can pass through unredacted text if the service is unreachable, so use synthetic or de-identified documents for local trials.
 
