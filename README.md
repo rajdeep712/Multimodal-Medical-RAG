@@ -1,18 +1,31 @@
-# MediLens AI — Secure Multimodal Search and Chat for Medical Documents
+<h1 align="center">MediLens AI — Secure Multimodal Search and Chat for Medical Documents</h1>
 
-[![Backend: FastAPI](https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&logoColor=white)](Backend)
-[![Frontend: React](https://img.shields.io/badge/frontend-React-087EA4?logo=react&logoColor=white)](Frontend)
-[![Worker: Celery](https://img.shields.io/badge/worker-Celery-37814A?logo=celery&logoColor=white)](Backend/app/celery_app.py)
-[![Queue: Redis](https://img.shields.io/badge/queue-Redis-DC382D?logo=redis&logoColor=white)](Backend/app/celery_app.py)
-[![Database: PostgreSQL](https://img.shields.io/badge/database-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](Backend/app/database.py)
-[![Authentication: Auth0](https://img.shields.io/badge/auth-Auth0-EB5424?logo=auth0&logoColor=white)](Backend/app/auth0.py)
+<p align="center">
+  <strong>Ask questions about PDFs and images, get answers grounded in your documents, and follow citations to the source page.</strong>
+</p>
 
-[![Vector search: Qdrant Cloud](https://img.shields.io/badge/vector%20search-Qdrant%20Cloud-B52658)](Backend/app/ingestion/qdrant_store.py)
-[![Object storage: AWS S3](https://img.shields.io/badge/object%20storage-AWS%20S3-447A14)](Backend/app/aws.py)
-[![Key management: AWS KMS](https://img.shields.io/badge/keys%20%26%20signing-AWS%20KMS-9A5200)](Backend/app/protection.py)
-[![Document parsing: Unstructured](https://img.shields.io/badge/document%20parsing-Unstructured-6554C0)](Backend/app/ingestion/content.py)
-[![Text and image embeddings: MedEmbed and BioMedCLIP](https://img.shields.io/badge/embeddings-MedEmbed%20%2B%20BioMedCLIP-176B87)](#1-ingestion)
-[![Chat providers: Groq and Gemini](https://img.shields.io/badge/chat%20providers-Groq%20%2F%20Gemini-5C48B8)](Backend/app/chat_llm.py)
+<p align="center">
+  <a href="Backend"><img src="https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&amp;logoColor=white&amp;style=for-the-badge" alt="Backend: FastAPI" /></a>
+  <a href="Frontend"><img src="https://img.shields.io/badge/frontend-React-087EA4?logo=react&amp;logoColor=white&amp;style=for-the-badge" alt="Frontend: React" /></a>
+  <a href="Backend/app/celery_app.py"><img src="https://img.shields.io/badge/worker-Celery-37814A?logo=celery&amp;logoColor=white&amp;style=for-the-badge" alt="Worker: Celery" /></a>
+  <a href="Backend/app/celery_app.py"><img src="https://img.shields.io/badge/queue-Redis-DC382D?logo=redis&amp;logoColor=white&amp;style=for-the-badge" alt="Queue: Redis" /></a>
+</p>
+
+<p align="center">
+  <a href="Backend/app/database.py"><img src="https://img.shields.io/badge/database-PostgreSQL-4169E1?logo=postgresql&amp;logoColor=white&amp;style=for-the-badge" alt="Database: PostgreSQL" /></a>
+  <a href="Backend/app/auth0.py"><img src="https://img.shields.io/badge/auth-Auth0-EB5424?logo=auth0&amp;logoColor=white&amp;style=for-the-badge" alt="Authentication: Auth0" /></a>
+  <a href="Backend/app/ingestion/qdrant_store.py"><img src="https://img.shields.io/badge/vector%20search-Qdrant%20Cloud-B52658?style=for-the-badge" alt="Vector search: Qdrant Cloud" /></a>
+  <a href="Backend/app/aws.py"><img src="https://img.shields.io/badge/object%20storage-AWS%20S3-447A14?style=for-the-badge" alt="Object storage: AWS S3" /></a>
+</p>
+
+<p align="center">
+  <a href="Backend/app/protection.py"><img src="https://img.shields.io/badge/keys%20%26%20signing-AWS%20KMS-9A5200?style=for-the-badge" alt="Key management: AWS KMS" /></a>
+  <a href="Backend/app/ingestion/content.py"><img src="https://img.shields.io/badge/document%20parsing-Unstructured-6554C0?style=for-the-badge" alt="Document parsing: Unstructured" /></a>
+  <a href="#1-ingestion"><img src="https://img.shields.io/badge/embeddings-MedEmbed%20%2B%20BioMedCLIP-176B87?style=for-the-badge" alt="Text and image embeddings: MedEmbed and BioMedCLIP" /></a>
+  <a href="Backend/app/chat_llm.py"><img src="https://img.shields.io/badge/chat%20providers-Groq%20%2F%20Gemini-5C48B8?style=for-the-badge" alt="Chat providers: Groq and Gemini" /></a>
+</p>
+
+---
 
 ![Animated MediLens AI overview: a medical document is indexed, its evidence supports a cited answer, and the protected original can be verified and opened.](docs/readme/architecture.gif)
 
@@ -35,9 +48,43 @@ MediLens AI is a multimodal retrieval app for medical documents. Upload PDFs or 
 
 FastAPI validates the upload, hashes its bytes for duplicate detection within the account, and stages a local PDF (converting PNG or JPEG when needed). The API uploads the encrypted package before recording the secured document in PostgreSQL and sending its ID to Celery via Redis.
 
-![Ingestion: validate and encrypt uploads, queue extraction, and index text, tables, and images.](docs/readme/ingestion.svg)
+```mermaid
+flowchart TD
 
-[Ingestion Mermaid source](docs/readme/ingestion.mmd)
+subgraph group_upload["Upload and protection"]
+  node_upload["Upload PDF, PNG, or JPEG"]
+  node_stage["Validate size and format<br/>Hash upload with SHA-256 and stage PDF"]
+  node_encrypt["Encrypt PDF, wrap AES key, and sign manifest"]
+  node_package[("Private S3<br/>Ciphertext, manifest, and signature")]
+  node_record[("PostgreSQL<br/>Secured document record")]
+end
+
+subgraph group_indexing["Background indexing"]
+  node_worker["Redis queue and Celery worker"]
+  node_extract["Unstructured<br/>Extract text, tables, and images"]
+  node_text["Redact text and normalized tables<br/>MedEmbed: 1024 dimensions"]
+  node_images["Analyze images and discard irrelevant results<br/>Embed summaries with MedEmbed and images with BioMedCLIP"]
+  node_assets[("Private S3<br/>Retained images")]
+  node_index[("Qdrant<br/>Vectors and citation metadata")]
+end
+
+node_upload --> node_stage
+node_stage --> node_encrypt
+node_encrypt --> node_package
+node_package --> node_record
+node_record --> node_worker
+node_worker --> node_extract
+node_extract -->|"text and tables"| node_text
+node_extract -->|"images"| node_images
+node_text --> node_index
+node_images --> node_assets
+node_assets -->|"upload before publishing image points with bucket and key"| node_index
+
+classDef toneBlue fill:#dbeafe,stroke:#2563eb,color:#172554
+classDef toneMint fill:#dcfce7,stroke:#16a34a,color:#14532d
+class node_package,node_record,node_assets toneBlue
+class node_index toneMint
+```
 
 - **Text and tables:** MedEmbed Large v0.1 produces **1,024-dimensional** vectors. Table rows are normalized for embedding; HTML is kept for retrieval.
 - **Images:** The worker drops irrelevant results, handles single-page image-only PDFs when extraction returns no chunks, and uses full-page context for handwriting when available. Retained images get **512-dimensional** BioMedCLIP vectors and their summaries get MedEmbed vectors.
@@ -47,9 +94,39 @@ FastAPI validates the upload, hashes its bytes for duplicate detection within th
 
 The query is embedded twice: MedEmbed searches the text space, and the BioMedCLIP text encoder searches the image space. Qdrant filters by owner and applicable document or date constraints, then merges the two rankings with reciprocal rank fusion.
 
-![Inference: retrieve evidence, sign selected image URLs, and stream a cited answer.](docs/readme/inference.svg)
+```mermaid
+flowchart TD
 
-[Inference Mermaid source](docs/readme/inference.mmd)
+subgraph group_search["Evidence retrieval"]
+  node_query["Question and document filters"]
+  node_embed["Encode query with MedEmbed and BioMedCLIP<br/>1024 and 512 dimensions"]
+  node_search[("Qdrant<br/>Filter and fuse text and image rankings")]
+  node_select["Select up to 5 chunks and at most 2 images by default"]
+end
+
+subgraph group_answer["Answer generation"]
+  node_sign["Validate image scope and sign S3 GET URLs<br/>5-minute expiry by default"]
+  node_history[("PostgreSQL chat history")]
+  node_context["Assemble prompt, history, and selected evidence"]
+  node_model["Multimodal LLM<br/>Fetch selected images directly from S3"]
+  node_answer["Stream the answer and citations"]
+end
+
+node_query --> node_embed
+node_embed --> node_search
+node_search --> node_select
+node_select -->|"text and tables"| node_context
+node_select -->|"image bucket and key"| node_sign
+node_sign -->|"presigned image URLs"| node_context
+node_history --> node_context
+node_context --> node_model
+node_model --> node_answer
+
+classDef toneBlue fill:#dbeafe,stroke:#2563eb,color:#172554
+classDef toneMint fill:#dcfce7,stroke:#16a34a,color:#14532d
+class node_search,node_history toneBlue
+class node_answer toneMint
+```
 
 Image signing happens after selection. The API sends temporary URLs to the model without reading image bytes from PostgreSQL, downloading the images itself, or converting them to Base64. The URLs are generated for the request and are not stored in Qdrant.
 
@@ -65,9 +142,38 @@ Image signing happens after selection. The API sends temporary URLs to the model
 | `manifest.json` | Document identity, encryption parameters, and ciphertext hash |
 | `signature.bin` | The detached signature over the manifest digest |
 
-![Decryption: verify the package, unwrap the AES key, and stream the authenticated PDF.](docs/readme/decryption.svg)
+```mermaid
+flowchart TD
 
-[Decryption Mermaid source](docs/readme/decryption.mmd)
+subgraph group_verify["Package verification"]
+  node_request["Authorized document request"]
+  node_fetch[("Download ciphertext, manifest, and signature from S3")]
+  node_verify{"Owner, manifest signature, and ciphertext hash valid?"}
+end
+
+subgraph group_decrypt["Decryption and delivery"]
+  node_unwrap["Unwrap the AES key with AWS KMS"]
+  node_authenticate{"AES-GCM tag and PDF header valid?"}
+  node_serve["Stream the verified PDF and clean up temporary files"]
+end
+
+node_reject["Reject the package"]
+
+node_request --> node_fetch
+node_fetch --> node_verify
+node_verify -->|"yes"| node_unwrap
+node_verify -->|"no"| node_reject
+node_unwrap --> node_authenticate
+node_authenticate -->|"yes"| node_serve
+node_authenticate -->|"no"| node_reject
+
+classDef toneAmber fill:#fef3c7,stroke:#d97706,color:#78350f
+classDef toneMint fill:#dcfce7,stroke:#16a34a,color:#14532d
+classDef toneRose fill:#ffe4e6,stroke:#e11d48,color:#881337
+class node_verify,node_authenticate toneAmber
+class node_serve toneMint
+class node_reject toneRose
+```
 
 This protects the stored source PDF. The server decrypts it for authorized viewing and may use a local plaintext copy for ingestion. Retrieved evidence can also reach the configured model providers. The current PII client can pass through unredacted text if the service is unreachable, so use synthetic or de-identified documents for local trials.
 
