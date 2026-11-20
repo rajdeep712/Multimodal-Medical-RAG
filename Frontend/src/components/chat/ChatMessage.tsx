@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { ChatMessage as ChatMessageType } from '../../types/chat.ts';
 import { MarkdownRenderer } from './MarkdownRenderer.tsx';
+import { stripHighlightMarkers } from '../../utils/markdownParser.ts';
 import { SourcesPanel } from './SourcesPanel.tsx';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx';
 import {
@@ -91,7 +92,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     isStreaming && !message.content && (!message.citations || message.citations.length === 0);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.content);
+    navigator.clipboard.writeText(stripHighlightMarkers(message.content, isStreaming));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

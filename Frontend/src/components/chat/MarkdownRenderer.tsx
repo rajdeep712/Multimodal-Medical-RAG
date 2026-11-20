@@ -41,22 +41,30 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   // each [[cite:E#]] badge gets a stable identity within this message.
   const badgeOccurrences = new Map<string, number>();
 
-  const renderInline = (text: string) => {
-    const tokens = tokenizeInline(text, citations);
+  const renderInline = (text: string, streamingTail = false, allowHighlights = true): React.ReactNode => {
+    const tokens = tokenizeInline(text, citations, {
+      isStreaming: Boolean(isStreaming && streamingTail), allowHighlights,
+    });
     return tokens.map((token, idx) => {
       switch (token.type) {
         case 'bold':
           return (
             <strong key={idx} className="font-bold text-[#123047]">
               {/* Re-tokenize so math inside bold (e.g. **$10^9/l$**) renders */}
-              {renderInline(token.text)}
+              {renderInline(token.text, streamingTail && idx === tokens.length - 1, allowHighlights)}
             </strong>
           );
         case 'italic':
           return (
             <em key={idx} className="italic text-[#475569]">
-              {renderInline(token.text)}
+              {renderInline(token.text, streamingTail && idx === tokens.length - 1, allowHighlights)}
             </em>
+          );
+        case 'highlight':
+          return (
+            <mark key={idx} className="rounded-sm bg-amber-100 px-0.5 py-px text-slate-900 box-decoration-clone">
+              {renderInline(token.text, streamingTail && !token.closed, false)}
+            </mark>
           );
         case 'code':
           return (
@@ -123,7 +131,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                   key={bIdx}
                   className="text-lg font-black text-[#123047] tracking-tight mt-3 mb-1"
                 >
-                  {renderInline(block.content || '')}
+                  {renderInline(block.content || '', bIdx === blocks.length - 1)}
                 </h1>
               );
             }
@@ -133,7 +141,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                   key={bIdx}
                   className="text-base font-extrabold text-[#123047] tracking-tight mt-3 mb-1"
                 >
-                  {renderInline(block.content || '')}
+                  {renderInline(block.content || '', bIdx === blocks.length - 1)}
                 </h2>
               );
             }
@@ -143,7 +151,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                 key={bIdx}
                 className="text-xs font-bold uppercase tracking-wider text-[#087F8C] flex items-center gap-1.5 border-b border-slate-100 pb-1 mt-3 mb-1"
               >
-                {renderInline(block.content || '')}
+                {renderInline(block.content || '', bIdx === blocks.length - 1)}
               </h3>
             );
           }
@@ -156,7 +164,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               >
                 <Info className="w-4 h-4 text-[#087F8C] shrink-0 mt-0.5" />
                 <div className="flex-1 leading-relaxed">
-                  {renderInline(block.content || '')}
+                  {renderInline(block.content || '', bIdx === blocks.length - 1)}
                 </div>
               </div>
             );
@@ -179,7 +187,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                 {block.items?.map((item, itemIdx) => (
                   <li key={itemIdx} className="flex items-start gap-2 text-xs sm:text-sm">
                     <span className="w-1.5 h-1.5 rounded-full bg-[#087F8C] shrink-0 mt-2" />
-                    <span className="flex-1 leading-relaxed">{renderInline(item)}</span>
+                    <span className="flex-1 leading-relaxed">{renderInline(item, bIdx === blocks.length - 1 && itemIdx === (block.items?.length ?? 0) - 1)}</span>
                   </li>
                 ))}
               </ul>
@@ -194,7 +202,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                     <span className="w-5 h-5 rounded-md bg-[#DDF4F5] text-[#087F8C] text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
                       {itemIdx + 1}
                     </span>
-                    <span className="flex-1 leading-relaxed">{renderInline(item)}</span>
+                    <span className="flex-1 leading-relaxed">{renderInline(item, bIdx === blocks.length - 1 && itemIdx === (block.items?.length ?? 0) - 1)}</span>
                   </li>
                 ))}
               </ol>
@@ -212,7 +220,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                       <tr className="bg-[#F1F5F9] text-[#123047] font-bold border-b border-[#E2E8F0]">
                         {headers.map((h, hIdx) => (
                           <th key={hIdx} className="py-2 px-3">
-                            {renderInline(h)}
+                            {renderInline(h, bIdx === blocks.length - 1 && rows.length === 0 && hIdx === headers.length - 1)}
                           </th>
                         ))}
                       </tr>
@@ -223,7 +231,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
                       <tr key={rIdx} className="hover:bg-[#F8FAFC]">
                         {row.map((cell, cIdx) => (
                           <td key={cIdx} className="py-2 px-3 text-[#334155]">
-                            {renderInline(cell)}
+                            {renderInline(cell, bIdx === blocks.length - 1 && rIdx === rows.length - 1 && cIdx === row.length - 1)}
                           </td>
                         ))}
                       </tr>
@@ -238,7 +246,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           default: {
             return (
               <p key={bIdx} className="my-1.5 leading-relaxed">
-                {renderInline(block.content || '')}
+                {renderInline(block.content || '', bIdx === blocks.length - 1)}
               </p>
             );
           }

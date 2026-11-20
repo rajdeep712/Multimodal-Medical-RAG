@@ -35,24 +35,24 @@ const dayLabel = (iso: string): string => {
 
 const SUGGESTED_PROMPTS = [
   {
-    title: 'Summarize my latest blood report',
-    description: 'Get an overview of hematology and metabolic panels',
-    badge: 'CBC & CMP',
+    title: 'What is a complete blood count (CBC)?',
+    description: 'Understand what this blood test measures',
+    badge: 'Medical Tests',
   },
   {
-    title: 'Explain the abnormal values in my CBC',
-    description: 'Analyze low platelets and reference range flags',
-    badge: 'Lab Focus',
+    title: 'What is paracetamol commonly used for?',
+    description: 'Learn about common uses and precautions',
+    badge: 'Medicines',
   },
   {
-    title: 'What medications are mentioned in my prescription?',
-    description: 'Review Augmentin dosage, schedule, and warnings',
-    badge: 'Rx Regimen',
+    title: 'What do blood pressure numbers mean?',
+    description: 'Understand systolic and diastolic readings',
+    badge: 'Health Basics',
   },
   {
-    title: 'Compare findings across my medical reports',
-    description: 'Correlate chest radiograph with lab results',
-    badge: 'Multimodal',
+    title: "How can I prepare for a doctor's appointment?",
+    description: 'Plan useful questions and information to bring',
+    badge: 'Care & Visits',
   },
 ];
 
@@ -400,10 +400,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               </div>
 
               <h3 className="text-xl font-extrabold text-[#123047] tracking-tight">
-                How can I help you understand your documents?
+                What health question can I help with?
               </h3>
               <p className="text-xs sm:text-sm text-[#64748B] mt-2 mb-8 leading-relaxed max-w-md">
-                Ask questions about your uploaded laboratory reports, prescriptions, or imaging summaries. Every answer links to verifiable source evidence.
+                Ask about medicines, medical tests, or everyday health topics. You can also upload documents for answers grounded in your records.
               </p>
 
               {/* 4 Clickable Suggested Prompts */}

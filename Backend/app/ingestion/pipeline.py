@@ -10,11 +10,15 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
+from contextlib import AsyncExitStack
 
 import aiofiles
 import aiofiles.os
 import httpx
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError, ConnectionClosedError, ConnectTimeoutError,
+    EndpointConnectionError, ReadTimeoutError,
+)
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -33,9 +37,9 @@ from .image_pipeline import (
     downscale_image_base64,
     is_relevant_result,
     process_all,
-    upload_image_chunks,
+    build_image_chunks,
 )
-from .image_repository import replace_document_images
+from .image_repository import delete_image_keys, upload_document_images
 from .pii import detect_pii_batch  # noqa: F401  (re-exported for tests)
 from .qdrant_store import QdrantStore
 from .text_pipeline import upload_table_chunks, upload_text_chunks
@@ -50,6 +54,10 @@ TRANSIENT_EXCEPTIONS = (
     TimeoutError,
     OSError,
     ClientError,
+    EndpointConnectionError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    ReadTimeoutError,
     OperationalError,
 )
 
@@ -63,21 +71,22 @@ async def _resolve_pdf(document_id: str, user_id: str, s3_bucket: str, s3_prefix
     logger.info(
         "Local original missing for %s; decrypting from S3 package", document_id
     )
-    await aws.init_aws()
     temporary_directory = tempfile.TemporaryDirectory(prefix="medilens-ingest-")
     temporary_path = Path(temporary_directory.name)
-    package = await download_encrypted_package(
-        bucket=s3_bucket,
-        prefix=s3_prefix,
-        output_directory=temporary_path,
-    )
     pdf_path = temporary_path / "document.pdf"
-    await verify_and_decrypt_document(
-        package=package,
-        output_path=pdf_path,
-        user_id=user_id,
-        document_id=document_id,
-    )
+    try:
+        async with aws.task_aws_clients() as (s3_resource, kms_client):
+            package = await download_encrypted_package(
+                bucket=s3_bucket, prefix=s3_prefix,
+                output_directory=temporary_path, s3_resource=s3_resource,
+            )
+            await verify_and_decrypt_document(
+                package=package, output_path=pdf_path,
+                user_id=user_id, document_id=document_id, kms_client=kms_client,
+            )
+    except BaseException:
+        temporary_directory.cleanup()
+        raise
     return pdf_path, temporary_directory
 
 
@@ -132,9 +141,12 @@ async def _run_ingestion_inner(
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     store = QdrantStore()
-    aws_initialized = False
     temp_directory: tempfile.TemporaryDirectory | None = None
     point_ids: list[str] = []
+    task_resources = AsyncExitStack()
+    image_client = None
+    uploaded_image_keys: list[str] = []
+    images_committed = False
 
     try:
         async with session_factory() as session:
@@ -146,7 +158,6 @@ async def _run_ingestion_inner(
                 # Terminal event so any waiting SSE stream closes cleanly.
                 await events.publish_document_event(
                     user_id, document_id, "DELETED", is_ready=False,
-                    client=events.create_task_redis(),
                 )
                 return "SKIPPED"
             original_filename = doc.original_filename
@@ -155,13 +166,12 @@ async def _run_ingestion_inner(
             await session.commit()
 
         await events.publish_document_event(
-            user_id, document_id, "PROCESSING", client=events.create_task_redis()
+            user_id, document_id, "PROCESSING"
         )
 
         pdf_path, temp_directory = await _resolve_pdf(
             document_id, user_id, doc.s3_bucket, doc.s3_prefix
         )
-        aws_initialized = aws.kms is not None
 
         tables, texts, images = await extract_content(
             pdf_path, image_upload=doc.mime_type in {"image/png", "image/jpeg"},
@@ -189,8 +199,12 @@ async def _run_ingestion_inner(
                 image_item.get("base64Image") or ""
             )
 
-        chain = build_image_chain()
-        embedding_model = build_embedding_model()
+        # Explicit clients bypass LangChain's process-wide default HTTP cache.
+        # Each document's transports belong to its asyncio.run() event loop.
+        analysis_http = await task_resources.enter_async_context(httpx.AsyncClient(timeout=180))
+        embedding_http = await task_resources.enter_async_context(httpx.AsyncClient(timeout=180))
+        chain = build_image_chain(http_async_client=analysis_http)
+        embedding_model = build_embedding_model(http_async_client=embedding_http)
         await store.ensure_collection()
 
         async with httpx.AsyncClient(timeout=settings.pii_api_timeout_seconds) as pii_client, \
@@ -237,22 +251,25 @@ async def _run_ingestion_inner(
                         selected_for_indexing=is_relevant_result(result),
                     )
 
-                image_ids, selected_images = await upload_image_chunks(
+                image_points, selected_images = await build_image_chunks(
                     images,
                     analysis_results,
-                    store=store,
                     embedding_model=embedding_model,
                     clip_client=clip_client,
                     doc_id=document_id,
                     user_id=user_id,
                 )
             finally:
-                table_ids = await table_task
-                text_ids = await text_task
+                batch_results = await asyncio.gather(table_task, text_task, return_exceptions=True)
+                for result in batch_results:
+                    if isinstance(result, BaseException):
+                        raise result
+                table_ids, text_ids = batch_results
 
+        image_ids = [point.id for point in image_points]
         point_ids = [*table_ids, *text_ids, *image_ids]
 
-        # HANDWRITING rows store the base64 of the WHOLE rendered page instead
+        # HANDWRITING objects store the WHOLE rendered page instead
         # of the cropped element, so the handwritten note is always shown with
         # its full page context. All handwriting rows on one page share the
         # same rendered page (rendered once per page number).
@@ -280,7 +297,7 @@ async def _run_ingestion_inner(
         for image in handwriting_rows:
             page_b64 = page_base64_map.get(image.get("page_number"))
             if page_b64:
-                image["image_base64_for_db"] = page_b64
+                image["image_base64_for_storage"] = page_b64
 
         logfire.info(
             "handwriting whole-page base64 prepared",
@@ -300,42 +317,61 @@ async def _run_ingestion_inner(
         )
 
         async with session_factory() as session:
-            doc = await session.get(Document, document_id)
+            # The delete endpoint takes the same row lock. No document can be
+            # deleted between the S3 upload and publishing its search points.
+            doc = await session.get(Document, document_id, with_for_update=True)
             if doc is None:
                 # Deleted while processing: roll the index back to a clean state.
-                await store.delete_points(point_ids)
+                await store.delete_document_points(user_id, document_id)
                 logger.info("Document %s deleted during ingestion; cleaned Qdrant", document_id)
                 await events.publish_document_event(
                     user_id, document_id, "DELETED", is_ready=False,
-                    client=events.create_task_redis(),
                 )
                 return "SKIPPED"
 
-            await replace_document_images(
-                session,
-                document_id=document_id,
-                user_id=doc.user_id,
-                images=selected_images,
-            )
+            if selected_images:
+                # Fail clearly on the placeholder before opening AWS connections.
+                _ = settings.image_s3_location
+                image_client = await task_resources.enter_async_context(aws.task_s3_client())
+                await upload_document_images(
+                    image_client, selected_images, document_id=document_id,
+                    user_id=user_id, uploaded_keys=uploaded_image_keys,
+                )
+                images_by_id = {image["image_id"]: image for image in selected_images}
+                for point in image_points:
+                    image = images_by_id[point.payload["image_id"]]
+                    point.payload.update({
+                        "image_s3_bucket": image["image_s3_bucket"],
+                        "image_s3_key": image["image_s3_key"],
+                    })
+                await store.upsert(image_points)
             doc.is_ready = True
             doc.ingestion_status = "INDEXED"
             doc.ingestion_error = None
             doc.qdrant_point_ids = point_ids
             await session.commit()
+            images_committed = True
 
-        await events.publish_document_event(
-            user_id,
-            document_id,
-            "INDEXED",
-            is_ready=True,
-            client=events.create_task_redis(),
-        )
+        try:
+            await events.publish_document_event(
+                user_id, document_id, "INDEXED", is_ready=True,
+            )
+        except Exception:
+            # A notification failure must not undo committed storage/index data.
+            logger.exception("Could not publish INDEXED event for %s", document_id)
         logger.info(
             "Document %s indexed with %s Qdrant points", document_id, len(point_ids)
         )
         return "INDEXED"
 
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
+        if images_committed:
+            # Cancellation after commit (e.g. while sending the notification)
+            # must not remove the index for an already-INDEXED document.
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            logger.exception("Post-commit ingestion notification failed for %s", document_id)
+            return "INDEXED"
         logger.exception("Ingestion failed for document %s", document_id)
 
         # Best-effort rollback of partially written Qdrant points.
@@ -349,10 +385,13 @@ async def _run_ingestion_inner(
                 "Qdrant cleanup failed for document %s", document_id
             )
 
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+
         # Transient infrastructure failure with another Celery attempt left:
         # leave the document PROCESSING and let the task's autoretry schedule
         # the backoff. The final attempt falls through to the ERROR marking.
-        is_transient = isinstance(exc, TRANSIENT_EXCEPTIONS) and not isinstance(
+        is_transient = isinstance(exc, (TransientIngestionError, *TRANSIENT_EXCEPTIONS)) and not isinstance(
             exc, FileNotFoundError
         )
         if is_transient and retrying:
@@ -379,7 +418,6 @@ async def _run_ingestion_inner(
                 "ERROR",
                 is_ready=False,
                 error=str(exc) or exc.__class__.__name__,
-                client=events.create_task_redis(),
             )
         except Exception:
             logger.exception("Could not persist the ingestion error for %s", document_id)
@@ -387,6 +425,15 @@ async def _run_ingestion_inner(
         return "ERROR"
 
     finally:
+        # Also runs for cancellation/watchdog timeouts, after all PUT tasks
+        # have drained. Never roll back images after the INDEXED commit.
+        if image_client is not None and uploaded_image_keys and not images_committed:
+            try:
+                bucket, _ = settings.image_s3_location
+                await delete_image_keys(image_client, bucket, uploaded_image_keys)
+            except Exception:
+                logger.exception("Could not clean up S3 images for %s", document_id)
+        await task_resources.aclose()
         # The worker is done with the stored original now; remove it (the
         # encrypted copy always remains in S3 as the source of truth).
         try:
@@ -398,11 +445,6 @@ async def _run_ingestion_inner(
 
         if temp_directory is not None:
             temp_directory.cleanup()
-        if aws_initialized:
-            try:
-                await aws.close_aws()
-            except Exception:
-                pass
         try:
             await store.close()
         except Exception:

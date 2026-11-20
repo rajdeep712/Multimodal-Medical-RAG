@@ -42,6 +42,7 @@ async def download_encrypted_package(
     prefix: str,
     output_directory: Path,
     is_disconnected: DisconnectCheck | None = None,
+    s3_resource=None,
 ) -> dict[str, Path]:
     output_directory.mkdir(parents=True, exist_ok=True)
 
@@ -62,7 +63,7 @@ async def download_encrypted_package(
         use_threads=True,
     )
 
-    bucket_resource = await aws.s3.Bucket(bucket)
+    bucket_resource = await (s3_resource if s3_resource is not None else aws.s3).Bucket(bucket)
 
     async def download_one(key: str, destination: Path) -> None:
         await bucket_resource.download_file(
@@ -72,12 +73,17 @@ async def download_encrypted_package(
         )
 
     await _raise_if_cancelled(is_disconnected)
-    await asyncio.gather(
+    results = await asyncio.gather(
         *(
             download_one(f"{prefix}/{filename}", paths[key])
             for key, filename in package_files.items()
-        )
+        ),
+        return_exceptions=True,
     )
+    # Finish all requests before a worker exits its task-local S3 context.
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
     await _raise_if_cancelled(is_disconnected)
 
     return paths
@@ -95,9 +101,11 @@ async def verify_manifest_signature(
     manifest: dict,
     signature: bytes,
     is_disconnected: DisconnectCheck | None = None,
+    kms_client=None,
 ) -> bool:
     await _raise_if_cancelled(is_disconnected)
-    response = await aws.kms.get_public_key(KeyId=signing_key_id)
+    client = kms_client if kms_client is not None else aws.kms
+    response = await client.get_public_key(KeyId=signing_key_id)
     public_key = load_der_public_key(response["PublicKey"])
 
     manifest_bytes = canonical_json(manifest)
@@ -152,9 +160,11 @@ async def decrypt_aes_key(
     kms_key_id: str,
     encrypted_aes_key: bytes,
     is_disconnected: DisconnectCheck | None = None,
+    kms_client=None,
 ) -> bytes:
     await _raise_if_cancelled(is_disconnected)
-    response = await aws.kms.decrypt(
+    client = kms_client if kms_client is not None else aws.kms
+    response = await client.decrypt(
         KeyId=kms_key_id,
         CiphertextBlob=encrypted_aes_key,
         EncryptionAlgorithm="RSAES_OAEP_SHA_256",
@@ -205,6 +215,7 @@ async def verify_and_decrypt_document(
     user_id: str,
     document_id: str,
     is_disconnected: DisconnectCheck | None = None,
+    kms_client=None,
 ) -> dict:
     await _raise_if_cancelled(is_disconnected)
 
@@ -230,6 +241,7 @@ async def verify_and_decrypt_document(
         manifest=manifest,
         signature=signature,
         is_disconnected=is_disconnected,
+        kms_client=kms_client,
     )
     if not signature_valid:
         raise SecurityError("Digital signature verification failed")
@@ -248,6 +260,7 @@ async def verify_and_decrypt_document(
         kms_key_id=settings.kms_encryption_key_id,
         encrypted_aes_key=crypto["encrypted_aes_key"],
         is_disconnected=is_disconnected,
+        kms_client=kms_client,
     )
 
     try:

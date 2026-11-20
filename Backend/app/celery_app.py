@@ -151,7 +151,6 @@ async def _sweep_stale_ingestions_async() -> None:
                     "ERROR",
                     is_ready=False,
                     error="Ingestion was interrupted — please re-upload",
-                    client=events.create_task_redis(),
                 )
                 logger.warning(
                     "Sweep: marked stale PROCESSING document %s (user %s) as ERROR",

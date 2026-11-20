@@ -4,6 +4,7 @@ import {
   tokenizeInline,
   parseMarkdownBlocks,
   beautifyOutsideMath,
+  stripHighlightMarkers,
 } from './markdownParser.ts';
 
 test('tokenizeInline parses bold, code, and citations correctly', () => {
@@ -106,4 +107,80 @@ test('parseMarkdownBlocks parses a display math block', () => {
 test('beautifyOutsideMath leaves formulas untouched, beautifies prose', () => {
   const out = beautifyOutsideMath('Count 240 x10^9/L and $10^{9}/\\mu\\text{l}$ done');
   assert.equal(out, 'Count 240 × 10⁹/L and $10^{9}/\\mu\\text{l}$ done');
+});
+
+test('highlights preserve exact text and adjacent citation tokens', () => {
+  const tokens = tokenizeInline('The report describes ==possible findings==. [[cite:E1, E2]]');
+  assert.deepEqual(tokens.find((t) => t.type === 'highlight'), {
+    type: 'highlight', text: 'possible findings', closed: true,
+  });
+  assert.deepEqual(tokens.at(-1), { type: 'evidence-citation', evidenceIds: ['E1', 'E2'] });
+  assert.equal(tokenizeInline('==first== and ==second==').filter((t) => t.type === 'highlight').length, 2);
+});
+
+test('every streaming prefix hides opening and closing highlight delimiters', () => {
+  const text = 'Result: ==requires confirmation==';
+  const visibleText = (prefix: string) => tokenizeInline(prefix, undefined, { isStreaming: true })
+    .map((token) => 'text' in token ? token.text : '').join('');
+  for (let length = 0; length <= text.length; length++) {
+    const prefix = text.slice(0, length);
+    const visible = visibleText(prefix);
+    assert.ok(!visible.includes('='), `raw delimiter at prefix ${JSON.stringify(prefix)}`);
+    assert.equal(stripHighlightMarkers(prefix, true), visible);
+    if (length > text.indexOf('==') + 2) {
+      assert.ok(tokenizeInline(prefix, undefined, { isStreaming: true }).some((t) => t.type === 'highlight'));
+    }
+  }
+});
+
+test('unclosed highlights become ordinary text after streaming ends', () => {
+  assert.deepEqual(tokenizeInline('==Incomplete finding'), [{ type: 'text', text: 'Incomplete finding' }]);
+  const tokens = tokenizeInline('==Incomplete finding [[cite:E1]]');
+  assert.ok(tokens.every((t) => t.type !== 'highlight'));
+  assert.deepEqual(tokens.at(-1), { type: 'evidence-citation', evidenceIds: ['E1'] });
+  assert.deepEqual(tokenizeInline('===='), []);
+  assert.ok(tokenizeInline('==first\nsecond==').every((t) => t.type !== 'highlight'));
+});
+
+test('code, formulas, escaped delimiters, and equality operators remain literal', () => {
+  for (const text of ['`a == b`', '$x_{a==b}$', '$$x == y$$', '\\(x == y\\)', '\\[x == y\\]',
+    'a = b', 'a == b', 'a===b', '\\==literal\\==']) {
+    assert.ok(tokenizeInline(text).every((t) => t.type !== 'highlight'), text);
+    assert.equal(stripHighlightMarkers(text), text);
+  }
+  const tokens = tokenizeInline('==Compare `a == b` and $x_{a==b}$==');
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].type, 'highlight');
+  if (tokens[0].type === 'highlight') {
+    const inner = tokenizeInline(tokens[0].text, undefined, { allowHighlights: false });
+    assert.ok(inner.some((t) => t.type === 'code'));
+    assert.ok(inner.some((t) => t.type === 'math'));
+    assert.ok(inner.every((t) => t.type !== 'highlight'));
+  }
+});
+
+test('bold and highlights nest without nested highlight tokens', () => {
+  const outerHighlight = tokenizeInline('==**important** finding==')[0];
+  assert.equal(outerHighlight.type, 'highlight');
+  if (outerHighlight.type === 'highlight') {
+    assert.equal(tokenizeInline(outerHighlight.text, undefined, { allowHighlights: false })[0].type, 'bold');
+  }
+  const outerBold = tokenizeInline('**A ==key finding==**')[0];
+  assert.equal(outerBold.type, 'bold');
+  if (outerBold.type === 'bold') assert.ok(tokenizeInline(outerBold.text).some((t) => t.type === 'highlight'));
+});
+
+test('highlight text survives headings, lists, tables, and saved message reloads', () => {
+  const saved = '## ==Findings==\n\n- A ==key caveat==. [[cite:E1]]\n\n| Test | Result |\n|---|---|\n| Value | ==12== |';
+  const restored = JSON.parse(JSON.stringify({ content: saved })).content;
+  const blocks = parseMarkdownBlocks(restored);
+  assert.ok(tokenizeInline(blocks[0].content ?? '').some((t) => t.type === 'highlight'));
+  assert.ok(tokenizeInline(blocks[1].items?.[0] ?? '').some((t) => t.type === 'highlight'));
+  assert.ok(tokenizeInline(blocks[2].tableData?.rows[0][1] ?? '').some((t) => t.type === 'highlight'));
+});
+
+test('copy removes only highlight syntax and preserves Markdown, citations, math, and code', () => {
+  const text = '**==Important==**: ==a caveat==. [[cite:E2]]\n`a == b` and $x_{a==b}$';
+  assert.equal(stripHighlightMarkers(text), '**Important**: a caveat. [[cite:E2]]\n`a == b` and $x_{a==b}$');
+  assert.equal(stripHighlightMarkers('==An incomplete finding'), 'An incomplete finding');
 });

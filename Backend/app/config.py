@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import field_validator
@@ -40,6 +41,34 @@ class Settings(BaseSettings):
     kms_signing_key_id: str
     s3_sse_kms_key_id: str
     s3_prefix: str = "medical-documents"
+    image_s3_url: str = ""
+    image_presigned_url_ttl_seconds: int = 300
+    image_s3_upload_concurrency: int = 5
+
+    @field_validator("image_presigned_url_ttl_seconds")
+    @classmethod
+    def validate_image_url_ttl(cls, value: int) -> int:
+        if not 1 <= value <= 3600:
+            raise ValueError("IMAGE_PRESIGNED_URL_TTL_SECONDS must be between 1 and 3600")
+        return value
+
+    @field_validator("image_s3_upload_concurrency")
+    @classmethod
+    def validate_image_upload_concurrency(cls, value: int) -> int:
+        if not 1 <= value <= 32:
+            raise ValueError("IMAGE_S3_UPLOAD_CONCURRENCY must be between 1 and 32")
+        return value
+
+    @property
+    def image_s3_location(self) -> tuple[str, str]:
+        """Resolve a private AWS S3 bucket/prefix, never an arbitrary endpoint."""
+        parsed = urlsplit(self.image_s3_url.strip())
+        prefix = parsed.path.strip("/")
+        if (parsed.scheme != "s3" or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", parsed.netloc)
+                or parsed.query or parsed.fragment or ".." in parsed.netloc
+                or "\\" in prefix or any(part in {".", "..", ""} for part in prefix.split("/") if prefix)):
+            raise ValueError("Set IMAGE_S3_URL to s3://your-private-bucket/optional-prefix")
+        return parsed.netloc, prefix
 
     max_upload_bytes: int = 10 * 1024 * 1024
     max_stored_pdf_bytes: int = 50 * 1024 * 1024

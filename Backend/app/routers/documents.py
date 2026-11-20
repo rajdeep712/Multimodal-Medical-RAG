@@ -462,7 +462,7 @@ async def delete_document(
         select(Document).where(
             Document.document_id == document_id,
             Document.user_id == user.id,
-        )
+        ).with_for_update()
     )
     if row is None:
         raise HTTPException(
@@ -488,6 +488,11 @@ async def delete_document(
         ) from exc
 
     try:
+        from ..ingestion.image_repository import delete_document_images
+
+        await delete_document_images(
+            aws.api_s3_client(), user_id=str(user.id), document_id=document_id,
+        )
         bucket = await aws.s3.Bucket(row.s3_bucket)
         delete_response = await bucket.delete_objects(
             Delete={

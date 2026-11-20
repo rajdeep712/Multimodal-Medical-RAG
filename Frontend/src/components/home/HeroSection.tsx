@@ -30,7 +30,7 @@ export const HeroSection: React.FC = () => {
   const navigate = useNavigate();
 
   return (
-    <section className="relative overflow-hidden bg-[#071A2C]">
+    <section className="relative min-h-[calc(100svh-4rem)] overflow-hidden bg-[#071A2C]">
       {/* Layered ambience: radial teal glows + fine dot grid */}
       <div className="absolute inset-0 pointer-events-none" aria-hidden>
         <div className="absolute -top-40 -left-40 w-[560px] h-[560px] rounded-full bg-[#087F8C]/25 blur-[140px]" />
@@ -44,7 +44,7 @@ export const HeroSection: React.FC = () => {
           }}
         />
         {/* Fade into the light sections below */}
-        <div className="absolute bottom-0 inset-x-0 h-28 bg-gradient-to-b from-transparent to-[#F7FAFC]" />
+        <div className="absolute bottom-0 inset-x-0 h-10 sm:h-12 bg-gradient-to-b from-transparent to-[#F7FAFC]" />
       </div>
 
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 pb-24 md:pt-20 md:pb-28">

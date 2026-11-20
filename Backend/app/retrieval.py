@@ -14,13 +14,14 @@ from datetime import datetime
 
 import httpx
 from qdrant_client import models
-from sqlalchemy import select, tuple_
 
 import logfire
 
 from .config import settings
 from .ingestion.embeddings import get_embedding_model
 from .ingestion.pii import post_with_retry
+from .ingestion.image_repository import sign_image_references
+from . import aws
 
 logger = logging.getLogger(__name__)
 
@@ -158,17 +159,22 @@ def select_context_points(
     ret_points = []   # all text / table points
     # top `max_images` image points
     citations = []
-    images_to_fetch = []  ## Images table is indexed by doc_id + image_id, so we can fetch them in one go with this separate list
+    selected_images = []
 
     for index, point in enumerate(points):
         if point.payload.get("content_type") == "image":
-            if len(images_to_fetch) < max_images:
-                ret_points.append({
+            if len(selected_images) < max_images:
+                image = {
                     "evidence_id": "E" + str(index+1),
                     "type": "image",
                     "image_id": point.payload.get("image_id"),
-                })
-                images_to_fetch.append((point.payload.get("doc_id"), point.payload.get("image_id")))
+                    "doc_id": point.payload.get("doc_id"),
+                    "user_id": point.payload.get("user_id"),
+                    "image_s3_bucket": point.payload.get("image_s3_bucket"),
+                    "image_s3_key": point.payload.get("image_s3_key"),
+                }
+                ret_points.append(image)
+                selected_images.append(image)
         else:
             if point.payload.get("content_type") == "table":
                 ret_points.append({
@@ -194,57 +200,10 @@ def select_context_points(
             "score": point.score
         })
 
-    return ret_points, citations, images_to_fetch
+    return ret_points, citations, selected_images
 
 
-async def fetch_images_base64(
-    images_to_fetch: list[tuple[str, str]],
-):
-    """Notebook cell 17, verbatim: fetch the stored JPEG bytes for the
-    selected images in a SINGLE DB call and base64-encode them for the LLM.
-
-    Returns one entry per input, in the SAME order; a row missing from the
-    DB (e.g. deleted) comes back with image_base64=None so the alignment is
-    preserved.
-    """
-    import base64
-
-    from sqlalchemy import tuple_ as sa_tuple_
-
-    from .database import SessionLocal
-    from .models import DocumentImage
-
-    if not images_to_fetch:
-        return []
-
-    stmt = (
-        select(
-            DocumentImage.document_id,
-            DocumentImage.image_id,
-            DocumentImage.image_data,
-        )
-        .where(
-            sa_tuple_(DocumentImage.document_id, DocumentImage.image_id).in_(images_to_fetch)
-        )
-    )
-
-    async with SessionLocal() as db:
-        rows = (await db.execute(stmt)).all()
-
-    base64_by_key = {
-        (row.document_id, row.image_id): base64.b64encode(row.image_data).decode("ascii")
-        for row in rows
-    }
-
-    class _ImageRow:
-        def __init__(self, image_id: str, image_base64: str | None):
-            self.image_id = image_id
-            self.image_base64 = image_base64
-
-    return [
-        _ImageRow(
-            image_id=image_id,
-            image_base64=base64_by_key.get((doc_id, image_id)),
-        )
-        for doc_id, image_id in images_to_fetch
-    ]
+async def sign_context_images(images: list[dict], *, user_id: str) -> None:
+    """Sign only selected image references; no SQL query or S3 object download."""
+    if images:
+        await sign_image_references(aws.api_s3_client(), images, user_id=user_id)

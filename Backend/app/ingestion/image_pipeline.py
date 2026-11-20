@@ -22,8 +22,9 @@ from qdrant_client import models
 
 from ..config import settings
 from .embeddings import embed_texts
+from .errors import TransientIngestionError
 from .pii import post_with_retry
-from .qdrant_store import QdrantStore, get_ingestion_timestamp, make_point_id
+from .qdrant_store import get_ingestion_timestamp, make_point_id
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +83,14 @@ def _is_tiny_image(image_base64: str) -> bool:
         return False
 
 
-def build_image_chain():
+def build_image_chain(*, http_async_client: httpx.AsyncClient | None = None):
     """Notebook cells 26 and 28: the image analysis chain (prompt | model | json parser)."""
     model = ChatOpenAI(
         model=settings.image_analysis_model,
         base_url=settings.image_analysis_base_url,
         api_key=settings.image_analysis_api_key or "not-needed",
         temperature=0,
+        http_async_client=http_async_client,
     )
 
     prompt_template = """You are an image analysis component in a Medical Document RAG (Retrieval-Augmented Generation) ingestion pipeline.
@@ -205,9 +207,8 @@ Ensure that the output is valid JSON and that all three fields are always presen
 async def process_all(chain, images: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Notebook cell 30: analyze all images in parallel under a semaphore.
 
-    Tiny images (sub-64px logos/decorations) skip the LLM entirely, and a
-    failing image falls back to IRRELEVANT instead of failing the whole
-    document (the sequential notebook cell 28 had the same per-image guard).
+    Tiny images (sub-64px logos/decorations) skip the LLM. Infrastructure
+    failures must trigger an ingestion retry, never masquerade as IRRELEVANT.
     """
     semaphore = asyncio.Semaphore(settings.image_analysis_concurrency)
 
@@ -222,12 +223,18 @@ async def process_all(chain, images: list[dict[str, Any]]) -> list[dict[str, Any
             try:
                 return await chain.ainvoke(image_base64)
             except Exception as error:
-                logger.warning("Image analysis failed, skipping image: %s", error)
-                return dict(IMAGE_FALLBACK_RESULT)
+                logger.warning("Image analysis failed (%s); ingestion will retry", type(error).__name__)
+                raise TransientIngestionError(
+                    f"Image analysis failed ({type(error).__name__}); retry ingestion"
+                ) from error
 
     results = await asyncio.gather(
-        *(analyze(img['base64Image']) for img in images)
+        *(analyze(img['base64Image']) for img in images), return_exceptions=True,
     )
+    # Drain every image request before the task closes its HTTP client.
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
 
     return results
 
@@ -242,22 +249,19 @@ def is_relevant_result(result: dict[str, Any]) -> bool:
     )
 
 
-async def upload_image_chunks(
+async def build_image_chunks(
     images: list[dict[str, Any]],
     analysis_results: list[dict[str, Any]],
     *,
-    store: QdrantStore,
     embedding_model,
     clip_client: httpx.AsyncClient,
     doc_id: str,
     user_id: str,
     image_batch_size: int = IMAGE_BATCH_SIZE,
-) -> tuple[list[str], list[dict[str, Any]]]:
-    """Notebook cell 62, async: filter, embed summaries + images, upsert points.
+) -> tuple[list[models.PointStruct], list[dict[str, Any]]]:
+    """Filter images and prepare vectors; the orchestrator publishes after S3.
 
-    Returns (qdrant point ids, selected image items enriched with summary and
-    image_type) - the selected items are the rows for the PostgreSQL images
-    table.
+    Returns (unpublished Qdrant points, selected image items).
     """
     ingestion_time = get_ingestion_timestamp()
 
@@ -412,21 +416,17 @@ async def upload_image_chunks(
             uploaded_count, total_images, doc_id,
         )
 
-    # 5. Single upsert for the whole phase.
-    if all_points:
-        await store.upsert(all_points)
-
     point_ids = [point.id for point in all_points]
 
     logfire.info(
-        "image phase upserted to Qdrant",
+        "image vectors prepared for S3 publication",
         document_id=doc_id,
         uploaded=len(all_points),
         total_images=total_images,
         point_ids=point_ids,
     )
     logger.info(
-        "Successfully uploaded %s image chunks for document %s.",
+        "Prepared %s image chunks for document %s.",
         uploaded_count, doc_id,
     )
-    return point_ids, selected_images
+    return all_points, selected_images

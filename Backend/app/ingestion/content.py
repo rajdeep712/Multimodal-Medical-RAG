@@ -441,13 +441,17 @@ def _partition_document(pdf_path: Path):
     )
 
 
-def _image_only_pdf_fallback(pdf_path: Path) -> list[dict[str, Any]]:
-    """Recover the full image upload when Unstructured finds no elements."""
+def _image_only_pdf_fallback(
+    pdf_path: Path, *, image_upload: bool = False,
+) -> list[dict[str, Any]]:
+    """Recover an empty single-page PDF, including converted image uploads."""
     import pymupdf
 
     with pymupdf.open(str(pdf_path)) as document:
         if len(document) != 1:
-            raise ValueError("An image upload must contain exactly one PDF page")
+            if image_upload:
+                raise ValueError("An image upload must contain exactly one PDF page")
+            return []
         page = document[0]
         # Render the whole page, including its rotation, rather than relying
         # on OCR/layout detection. Match the normal image pipeline's JPEG input.
@@ -476,11 +480,14 @@ def _image_only_pdf_fallback(pdf_path: Path) -> list[dict[str, Any]]:
 async def extract_content(
     pdf_path: Path, *, image_upload: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Run the blocking unstructured extraction in a worker thread."""
+    """Extract chunks, falling back to the whole page for empty one-page PDFs."""
     chunks = await asyncio.to_thread(_partition_document, pdf_path)
-    if not chunks and image_upload:
-        logger.info("Unstructured returned no chunks for image upload %s; using the whole PDF page as an image", pdf_path.name)
-        images = await asyncio.to_thread(_image_only_pdf_fallback, pdf_path)
+    if not chunks:
+        images = await asyncio.to_thread(
+            _image_only_pdf_fallback, pdf_path, image_upload=image_upload,
+        )
+        if images:
+            logger.info("Unstructured returned no chunks for %s; using the single PDF page as an image", pdf_path.name)
         return [], [], images
     tables, texts = await asyncio.to_thread(split_content, chunks)
     images = get_images_base64(chunks)

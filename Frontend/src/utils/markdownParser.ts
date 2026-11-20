@@ -5,6 +5,7 @@ export type InlineToken =
   | { type: 'bold'; text: string }
   | { type: 'italic'; text: string }
   | { type: 'code'; text: string }
+  | { type: 'highlight'; text: string; closed: boolean }
   | { type: 'math'; tex: string; displayMode: boolean }
   | { type: 'citation'; citationIndex: number; citation?: Citation }
   | { type: 'evidence-citation'; evidenceIds: string[] };
@@ -82,6 +83,88 @@ function isInlineMathContent(content: string): boolean {
 const MATH_SPAN_PATTERN =
   /(\$\$[^$]+\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)(?:[^$\n]+?)\$)/g;
 
+export interface InlineOptions {
+  /** True only for the inline text at the current streaming boundary. */
+  isStreaming?: boolean;
+  allowHighlights?: boolean;
+}
+
+function isEscaped(text: string, index: number): boolean {
+  let slashes = 0;
+  while (index > 0 && text[--index] === '\\') slashes++;
+  return slashes % 2 === 1;
+}
+
+/** Keep delimiter-like text inside code and formulas literal. */
+function protectedInlineEnd(text: string, index: number): number {
+  const pattern = /(`[^`]*`|\$\$[^$]+\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)(?:[^$\n]+?)\$)/y;
+  pattern.lastIndex = index;
+  const match = pattern.exec(text);
+  if (!match) return index;
+  const raw = match[0];
+  if (raw.startsWith('$') && !raw.startsWith('$$') && !isInlineMathContent(raw.slice(1, -1))) return index;
+  return pattern.lastIndex;
+}
+
+function readHighlight(text: string, start: number, isStreaming: boolean) {
+  if (isEscaped(text, start) || /[=\w]/.test(text[start - 1] ?? '')) return null;
+  const bodyStart = start + 2;
+  // Whitespace-delimited equality operators (x == y) are not emphasis.
+  if (text[bodyStart] && /\s|=/.test(text[bodyStart])) return null;
+  let end = bodyStart;
+  while (end < text.length && text[end] !== '\n' && text[end] !== '\r') {
+    const protectedEnd = protectedInlineEnd(text, end);
+    if (protectedEnd > end) {
+      end = protectedEnd;
+      continue;
+    }
+    if (text.startsWith('==', end) && !isEscaped(text, end)
+        && text[end - 1] !== '=' && text[end + 2] !== '='
+        && !/\s/.test(text[end - 1] ?? ' ')) {
+      return { text: text.slice(bodyStart, end), end: end + 2, closed: true };
+    }
+    end++;
+  }
+  let body = text.slice(bodyStart, end);
+  if (isStreaming && end === text.length && body.endsWith('=') && !isEscaped(body, body.length - 1)) {
+    body = body.slice(0, -1); // First half of a closing marker is still arriving.
+  }
+  return { text: body, end, closed: false };
+}
+
+/** Preserve Markdown/citations and literal code/math while removing highlight syntax. */
+export function stripHighlightMarkers(text: string, isStreaming = false): string {
+  let result = '';
+  for (let index = 0; index < text.length;) {
+    const protectedEnd = protectedInlineEnd(text, index);
+    if (protectedEnd > index) {
+      result += text.slice(index, protectedEnd);
+      index = protectedEnd;
+      continue;
+    }
+    const equals = /^={2,}/.exec(text.slice(index))?.[0];
+    if (equals) {
+      if (equals.length === 4 && !isEscaped(text, index)) {
+        index += 4; // Empty highlight.
+        continue;
+      }
+      const highlight = equals.length === 2 ? readHighlight(text, index, isStreaming) : null;
+      if (highlight) {
+        result += highlight.text;
+        index = highlight.end;
+        continue;
+      }
+      result += equals;
+      index += equals.length;
+      continue;
+    }
+    if (isStreaming && index === text.length - 1 && text[index] === '='
+        && !/[\w=]/.test(text[index - 1] ?? '') && !isEscaped(text, index)) break;
+    result += text[index++];
+  }
+  return result;
+}
+
 /**
  * Applies `transform` to the text outside math spans, leaving the math
  * content itself untouched (KaTeX renders it — e.g. beautifying "10^9"
@@ -113,13 +196,15 @@ export function beautifyOutsideMath(text: string): string {
  * bold, italic, code, evidence citations ([[cite:E1]] / [[cite E1, E4]]) and
  * legacy numeric citations [1], [2].
  */
-export function tokenizeInline(text: string, citations?: Citation[]): InlineToken[] {
+export function tokenizeInline(text: string, citations?: Citation[], options: InlineOptions = {}): InlineToken[] {
   if (!text) return [];
 
   // Math first so formulas win over bold/italic/code scanning; a code span
   // still protects its content since `` ` `` alternative starts earlier.
-  const pattern =
-    /(\$\$[^$]+\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)(?:[^$\n]+?)\$|\*\*[^*]+\*\*|`[^`]+`|\[\[cite:?[^\]]*\]\]|\[\d+\]|\*[^*]+\*)/gi;
+  const pattern = new RegExp(
+    String.raw`(\$\$[^$]+\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)(?:[^$\n]+?)\$|\*\*[^*]+\*\*|\x60[^\x60]+\x60|\[\[cite:?[^\]]*\]\]|\[\d+\]|\*[^*]+\*)`
+      + (options.allowHighlights === false ? '' : '|={2,}'), 'gi',
+  );
   const tokens: InlineToken[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -136,7 +221,21 @@ export function tokenizeInline(text: string, citations?: Citation[]): InlineToke
       });
     }
 
-    if (matchedStr.startsWith('$$') && matchedStr.endsWith('$$')) {
+    if (matchedStr.startsWith('==')) {
+      const highlight = matchedStr.length === 2 ? readHighlight(text, start, Boolean(options.isStreaming)) : null;
+      if (highlight) {
+        if (highlight.text) {
+          if (highlight.closed || (options.isStreaming && highlight.end === text.length)) {
+            tokens.push({ type: 'highlight', text: highlight.text, closed: highlight.closed });
+          } else {
+            tokens.push(...tokenizeInline(highlight.text, citations, { allowHighlights: false }));
+          }
+        }
+        pattern.lastIndex = highlight.end;
+      } else if (matchedStr !== '====' || isEscaped(text, start)) {
+        tokens.push({ type: 'text', text: matchedStr });
+      }
+    } else if (matchedStr.startsWith('$$') && matchedStr.endsWith('$$')) {
       tokens.push({
         type: 'math',
         tex: matchedStr.slice(2, -2).trim(),
@@ -206,9 +305,14 @@ export function tokenizeInline(text: string, citations?: Citation[]): InlineToke
   }
 
   if (lastIndex < text.length) {
-    tokens.push({
+    let tail = text.slice(lastIndex);
+    if (options.isStreaming && options.allowHighlights !== false && tail.endsWith('=')
+        && !/[\w=]/.test(text[text.length - 2] ?? '') && !isEscaped(text, text.length - 1)) {
+      tail = tail.slice(0, -1);
+    }
+    if (tail) tokens.push({
       type: 'text',
-      text: text.slice(lastIndex),
+      text: tail,
     });
   }
 

@@ -53,7 +53,7 @@ from ..models import (
 )
 from ..retrieval import (
     embed_query_texts,
-    fetch_images_base64,
+    sign_context_images,
     hybrid_multimodal_search,
     select_context_points,
 )
@@ -402,11 +402,10 @@ async def stream_chat_answer(
                     _cancel_events.pop(chat_id, None)
                     return
 
-                ret_points, citations, images_to_fetch = select_context_points(points)
-                image_fetch_started = time.perf_counter()
-                logger.info("Chat latency chat_id=%s stage=image_fetch started images=%d", chat_id, len(images_to_fetch))
-                image_rows = await fetch_images_base64(images_to_fetch)
-                logger.info("Chat latency chat_id=%s stage=image_fetch seconds=%.3f", chat_id, time.perf_counter() - image_fetch_started)
+                ret_points, citations, selected_images = select_context_points(points)
+                image_sign_started = time.perf_counter()
+                await sign_context_images(selected_images, user_id=job["user_id"])
+                logger.info("Chat latency chat_id=%s stage=image_sign seconds=%.3f images=%d", chat_id, time.perf_counter() - image_sign_started, len(selected_images))
                 if _cancelled():
                     _cancel_events.pop(chat_id, None)
                     return
@@ -422,7 +421,7 @@ async def stream_chat_answer(
 
                 # LLM stream with a deterministic abort: closing the generator
                 # closes the underlying provider HTTP connection midway.
-                llm_gen = _stream_answer(job["query"], ret_points, image_rows, history)
+                llm_gen = _stream_answer(job["query"], ret_points, history)
                 stopped_midway = False
                 try:
                     async for delta in llm_gen:
@@ -529,12 +528,11 @@ async def stream_chat_answer(
 async def _stream_answer(
     query: str,
     ret_points: list[dict],
-    image_rows,
     history: list[dict[str, str]] | None = None,
 ):
     from ..chat_llm import stream_answer as llm_stream_answer
 
-    async for delta in llm_stream_answer(query, ret_points, image_rows, history):
+    async for delta in llm_stream_answer(query, ret_points, history):
         yield delta
 
 

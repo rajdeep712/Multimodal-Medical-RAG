@@ -4,23 +4,26 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+import httpx
 from langchain_openai import OpenAIEmbeddings
 
 from ..config import settings
 
 
-@lru_cache(maxsize=1)
-def build_embedding_model() -> OpenAIEmbeddings:
+def build_embedding_model(*, http_async_client: httpx.AsyncClient | None = None) -> OpenAIEmbeddings:
+    """Build an ingestion client; the caller owns its task-local HTTP transport."""
     return OpenAIEmbeddings(
         model=settings.text_embedding_model,
         base_url=settings.text_embedding_base_url,
         api_key=settings.text_embedding_api_key or "lm-studio",
         check_embedding_ctx_length=False,
+        http_async_client=http_async_client,
     )
 
 
+@lru_cache(maxsize=1)
 def get_embedding_model() -> OpenAIEmbeddings:
-    """Process-wide cached instance — avoids rebuilding the httpx stack per query."""
+    """Cached only for FastAPI retrieval, which uses one persistent event loop."""
     return build_embedding_model()
 
 

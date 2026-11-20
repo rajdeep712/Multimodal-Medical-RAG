@@ -43,11 +43,26 @@ class ImageUploadFallbackTests(unittest.IsolatedAsyncioTestCase):
         again = (await self.recover())[2][0]
         self.assertEqual(item["image_id"], again["image_id"])
 
-    async def test_empty_normal_pdf_does_not_trigger_fallback(self):
-        with patch.object(content, "_partition_document", return_value=[]), \
-                patch.object(content, "_image_only_pdf_fallback") as fallback:
-            self.assertEqual(await content.extract_content(self.pdf), ([], [], []))
-            fallback.assert_not_called()
+    async def test_empty_single_page_pdf_recovers_image_without_image_upload_flag(self):
+        with patch.object(content, "_partition_document", return_value=[]):
+            tables, texts, images = await content.extract_content(self.pdf)
+        self.assertEqual((tables, texts), ([], []))
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["page_number"], 1)
+        with Image.open(io.BytesIO(base64.b64decode(images[0]["base64Image"]))) as recovered:
+            self.assertGreater(recovered.getpixel((recovered.width // 2, recovered.height // 2))[0], 240)
+            self.assertLess(recovered.getpixel((0, 0))[0], 15)
+
+    async def test_empty_multipage_pdf_keeps_existing_behavior(self):
+        import pymupdf
+
+        multipage = Path(self.temp.name) / "multipage.pdf"
+        with pymupdf.open() as document:
+            document.new_page()
+            document.new_page()
+            document.save(multipage)
+        with patch.object(content, "_partition_document", return_value=[]):
+            self.assertEqual(await content.extract_content(multipage), ([], [], []))
 
     async def test_existing_extraction_is_preserved(self):
         existing = [{"image_id": "existing"}]
@@ -73,16 +88,15 @@ class ImageUploadFallbackTests(unittest.IsolatedAsyncioTestCase):
         chain.ainvoke.assert_awaited_once_with(images[0]["base64Image"])
         response = Mock()
         response.json.return_value = {"embeddings": [[0.0] * 512]}
-        store = Mock(upsert=AsyncMock())
         with patch.object(image_pipeline, "embed_texts", AsyncMock(return_value=[[0.0] * 1024])), \
                 patch.object(image_pipeline, "post_with_retry", AsyncMock(return_value=response)):
-            ids, selected = await image_pipeline.upload_image_chunks(
-                images, analyses, store=store, embedding_model=Mock(), clip_client=Mock(),
+            points, selected = await image_pipeline.build_image_chunks(
+                images, analyses, embedding_model=Mock(), clip_client=Mock(),
                 doc_id="test-document", user_id="test-user",
             )
-        self.assertEqual(len(ids), 1)
+        self.assertEqual(len(points), 1)
         self.assertEqual(selected[0]["image_type"], "MEDICAL_SCAN")
-        point = store.upsert.await_args.args[0][0]
+        point = points[0]
         self.assertEqual(point.payload["page_number"], 1)
         self.assertEqual(point.payload["file_name"], "scan.png")
         self.assertEqual(point.payload["coordinates"], images[0]["coordinates"])
